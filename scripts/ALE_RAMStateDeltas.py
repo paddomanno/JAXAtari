@@ -29,6 +29,7 @@ class Renderer:
     clock: pygame.time.Clock
     env: gym.Env
     ale: ALEInterface
+    current_wave = 0
 
     # Add render_scale parameter
     def __init__(self, env_name, no_render=[], render_scale=4):
@@ -396,6 +397,9 @@ class Renderer:
                     self.past_ram = None; self.ram = self._get_ram(); self.delta_render = []
                     terminated, truncated = False, False
 
+                elif event.key == pygame.K_l:  # L to go to next level/wave
+                    self.goto_next_level()
+
                 elif event.key == pygame.K_c: # Clone State
                      if self.paused and self.ale:
                          state_to_save = self._clone_state()
@@ -438,6 +442,56 @@ class Renderer:
             elif event.type == pygame.KEYUP:
                  if event.key in self.current_keys_down: self.current_keys_down.remove(event.key)
 
+    def ram_addr(asm_addr):
+        """Convert a 2600 zero-page address ($80–$FF) to ALE RAM index (0–127)."""
+        assert 0x80 <= asm_addr <= 0xFF, f"Address ${asm_addr:02X} is not in zero-page RAM"
+        return asm_addr - 0x80
+
+
+    LEVEL = ram_addr(0xBE)  # 62
+    ENEMY_ROUND = ram_addr(0x80)  # 0
+    ENEMY_WAVE = ram_addr(0xEB)  # 107
+    APPEARED_ENEMIES = ram_addr(0x9B)  # 27
+    ENEMY_REG_1 = ram_addr(0xAF)  # 47
+    ENEMY_REG_2 = ram_addr(0xB0)  # 48
+    ENEMY_REG_3 = ram_addr(0xB1)  # 49
+
+    def goto_next_level(self):
+
+        ale = self.env.unwrapped.ale
+
+        self.skip_attract(ale, self.env, frames=200)
+
+        TARGET_WAVE = self.current_wave + 1
+        self.current_wave += 1
+
+        ale.setRAM(self.LEVEL, TARGET_WAVE)
+        ale.setRAM(self.APPEARED_ENEMIES, 0)
+
+        # Now end waves repeatedly until we're one wave before target
+        self.end_current_wave(ale, self.env, settle_frames=90)
+
+        # Step a frame to let the game register the change
+        obs, _, _, _, _ = self.env.step(0)
+
+    def skip_attract(self, ale, env, frames=200):
+        """Fire through the attract/title screen to start the game."""
+        for _ in range(frames):
+            env.step(1)  # action 1 = FIRE
+
+    def end_current_wave(self, ale, env, settle_frames=90):
+        """
+        Trick the game into ending the current wave by:
+        1. Setting AppearedEnemies = 8 (wave-complete threshold)
+        2. Clearing all three enemy registers (no live enemies)
+        Then letting it run its normal wave-transition code.
+        """
+        ale.setRAM(self.APPEARED_ENEMIES, 8)
+        ale.setRAM(self.ENEMY_REG_1, 0)
+        ale.setRAM(self.ENEMY_REG_2, 0)
+        ale.setRAM(self.ENEMY_REG_3, 0)
+        for _ in range(settle_frames):
+            env.step(0)  # NOOP — let the game animate and spawn new wave
 
     def _render(self):
         self.window.fill((0, 0, 0))
