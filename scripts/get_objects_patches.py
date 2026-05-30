@@ -20,6 +20,9 @@ parser.add_argument("-pr", "--print-reward", action="store_true")
 
 args = parser.parse_args()
 
+MAX_OBJECTS_PER_CATEGORY = 100
+BACKGROUND_RGB = np.array([0, 0, 0])
+IGNORED_OBJECT_CATEGORIES = ["NoObject", "Player", "PlayerMissile"]
 
 def save_rgb_array_as_png(rgb_array, filename):
     imageio.imwrite(filename, rgb_array)
@@ -30,7 +33,13 @@ def save_patch_as_png(patch, filename):
 
 
 def retrieve_objects_patch(object, frame):
-    x, y, w, h = object.xywh
+    x_o, y_o, w, h = object.xywh
+    # Expand detected object by 1 pixel but limit to frame boundaries
+    x = np.maximum(0, x_o-1)
+    y = np.maximum(0, y_o-1)
+    # +2 normally, less if x or y is clipped
+    w = np.minimum(np.minimum(x_o+w+1, x+w+2), frame.shape[1]) - x
+    h = np.minimum(np.minimum(y_o+h+1, y+h+2), frame.shape[0]) - y
     patch = frame[y:y+h, x:x+w]
     if patch is None or patch.size == 0:
         return None
@@ -43,7 +52,7 @@ def retrieve_objects_patch(object, frame):
             # Get the pixel color at (i, j)
             pixel_color = patch_rgba[i, j][:3]  # RGB part
             # Compare it to the object RGB color
-            if not np.all(pixel_color == object.rgb):
+            if np.all(pixel_color == BACKGROUND_RGB):
                 # Set alpha to 0 if it doesn't match the object's RGB
                 patch_rgba[i, j]= [0, 0, 0, 0]  # Set alpha to 0 (transparent)
             else:
@@ -55,19 +64,24 @@ def retrieve_objects_patch(object, frame):
 def save_objects_patches(objects, frame, game):
     msg_given = False
     for object in objects:
+        if object.category in IGNORED_OBJECT_CATEGORIES:
+            continue
         patch = retrieve_objects_patch(object, frame)
         if patch is None:
             continue
         big_patch = np.repeat(np.repeat(patch, 20, axis=0), 20, axis=1)
         if not os.path.isdir(f'patches/{game}'):
             os.makedirs(f'patches/{game}', exist_ok=True)
+        if not object.category:
+            print("Skipping object with no category")
+            continue
         i = 0
         while os.path.exists(f'patches/{game}/{object.category}_{i}.png'):
             i += 1
-            if i == 5 and not msg_given:
+            if i == np.floor(MAX_OBJECTS_PER_CATEGORY*0.8) and not msg_given:
                 print("Avoiding to save redundant objects > 0")
                 msg_given = True
-            if i > 10:
+            if i > MAX_OBJECTS_PER_CATEGORY:
                 break
         imageio.imwrite(f'patches/{game}/{object.category}_{i}.png', big_patch)
         jnp.save(f'patches/{game}/{object.category}_{i}.npy', patch)
