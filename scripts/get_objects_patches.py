@@ -77,14 +77,17 @@ def save_objects_patches(objects, frame, game):
 
 class Renderer:
     env: gym.Env
+    current_wave = 0
 
     def __init__(self, env_name: str):
-        self.env = OCAtari(env_name, mode="ram", hud=True, render_mode="human",
+        self.env = OCAtari(env_name, mode="both", hud=False, render_mode="human",
                            render_oc_overlay=True, frameskip=1)
         self.env.reset()
         self.env.render()  # initialize pygame video system
 
         self.paused = False
+        self.frame_by_frame = False
+        self.next_frame = False
         self.current_actions = set()
         self.keys2actions = {}
         for i, action in enumerate(self.env.get_action_meanings()):
@@ -103,7 +106,7 @@ class Renderer:
         self.running = True
         while self.running:
             self._handle_user_input()
-            if not self.paused:
+            if not (self.frame_by_frame and not self.next_frame) and not self.paused:
                 action = self._get_action()
                 obs, reward, term, trunc, info = self.env.step(action)
                 self.env.render()
@@ -114,6 +117,8 @@ class Renderer:
                 if args.print_reward and reward != 0:
                     print(reward)
                 self.frame += 1
+                self.next_frame = False
+
         pygame.quit()
 
     def _get_action(self):
@@ -141,8 +146,13 @@ class Renderer:
                 if event.key == pygame.K_p:  # 'P': pause/resume
                     self.paused = not self.paused
 
+                elif event.key == pygame.K_f: self.frame_by_frame = not self.frame_by_frame; self.next_frame = False; print(f"{'Frame-by-frame' if self.frame_by_frame else 'Continuous'}")
+                elif event.key == pygame.K_n and self.frame_by_frame: self.next_frame = True; print("Next Frame")
                 if event.key == pygame.K_r:  # 'R': reset
                     self.env.reset()
+
+                if event.key == pygame.K_l:  # L to go to next level/wave
+                    self.goto_next_level()
 
                 if event.key == pygame.K_o:  # 'O': Save objects
                     screen = self.env.unwrapped._ale.getScreenRGB()
@@ -158,6 +168,59 @@ class Renderer:
             elif event.type == pygame.KEYUP:  # keyboard key released
                 if event.key in self.keys2actions:
                     self.current_actions.remove(self.keys2actions[event.key])
+
+    def ram_addr(asm_addr):
+        """Convert a 2600 zero-page address ($80–$FF) to ALE RAM index (0–127)."""
+        assert 0x80 <= asm_addr <= 0xFF, f"Address ${asm_addr:02X} is not in zero-page RAM"
+        return asm_addr - 0x80
+
+
+    LEVEL = ram_addr(0xBE)  # 62
+    ENEMY_ROUND = ram_addr(0x80)  # 0
+    ENEMY_WAVE = ram_addr(0xEB)  # 107
+    APPEARED_ENEMIES = ram_addr(0x9B)  # 27
+    ENEMY_REG_1 = ram_addr(0xAF)  # 47
+    ENEMY_REG_2 = ram_addr(0xB0)  # 48
+    ENEMY_REG_3 = ram_addr(0xB1)  # 49
+
+    def goto_next_level(self):
+
+        ale = self.env._env.unwrapped.ale
+
+        self.skip_attract(ale, self.env, frames=200)
+
+        TARGET_WAVE = self.current_wave + 1
+        self.current_wave += 1
+
+        print(f"Going to level {TARGET_WAVE}")
+
+        ale.setRAM(self.LEVEL, TARGET_WAVE)
+        ale.setRAM(self.APPEARED_ENEMIES, 0)
+
+        # Now end waves repeatedly until we're one wave before target
+        self.end_current_wave(ale, self.env, settle_frames=90)
+
+        # Step a frame to let the game register the change
+        obs, _, _, _, _ = self.env.step(0)
+
+    def skip_attract(self, ale, env, frames=200):
+        """Fire through the attract/title screen to start the game."""
+        for _ in range(frames):
+            env.step(1)  # action 1 = FIRE
+
+    def end_current_wave(self, ale, env, settle_frames=90):
+        """
+        Trick the game into ending the current wave by:
+        1. Setting AppearedEnemies = 8 (wave-complete threshold)
+        2. Clearing all three enemy registers (no live enemies)
+        Then letting it run its normal wave-transition code.
+        """
+        ale.setRAM(self.APPEARED_ENEMIES, 8)
+        ale.setRAM(self.ENEMY_REG_1, 0)
+        ale.setRAM(self.ENEMY_REG_2, 0)
+        ale.setRAM(self.ENEMY_REG_3, 0)
+        for _ in range(settle_frames):
+            env.step(0)  # NOOP — let the game animate and spawn new wave
 
 
 if __name__ == "__main__":
