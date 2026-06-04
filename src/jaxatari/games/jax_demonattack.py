@@ -145,7 +145,7 @@ def _demon_hpos_to_x(
     (_, _, result, found), _ = jax.lax.scan(
         sub_body,
         (
-        jnp.full_like(target, start_hpos),
+            jnp.full_like(target, start_hpos),
             jnp.full_like(target, start_x),
             jnp.full_like(target, start_x),
             jnp.zeros_like(target, dtype=jnp.bool_),
@@ -788,14 +788,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_hit = jnp.logical_and(
                 s_alive[i],
                 jnp.logical_and(
-                    l_active,
-                    jnp.logical_and(
-                        state.laser_x + self.consts.LASER_SIZE[1] > state.demons_x[i],
+                    state.spawn_anim_timer[i] <= 0,
+                    jnp.logical_and(l_active,
                         jnp.logical_and(
-                            state.laser_x < state.demons_x[i] + self.consts.DEMON_SIZE[1],
+                            state.laser_x + self.consts.LASER_SIZE[1] > state.demons_x[i],
                             jnp.logical_and(
-                                state.laser_y < state.demons_y[i] + self.consts.DEMON_SIZE[0],
-                                state.laser_y + self.consts.LASER_SIZE[1] > state.demons_y[i]
+                                state.laser_x < state.demons_x[i] + self.consts.DEMON_SIZE[1],
+                                jnp.logical_and(
+                                    state.laser_y < state.demons_y[i] + self.consts.DEMON_SIZE[0],
+                                    state.laser_y + self.consts.LASER_SIZE[1] > state.demons_y[i]
+                                )
                             )
                         )
                     )
@@ -930,7 +932,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def observation_space(self) -> spaces.Dict:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
         demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS,
-                                               screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+            screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
 
         return spaces.Dict({
             "player": object_space,
