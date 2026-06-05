@@ -143,11 +143,6 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(3, 4, 5, 5, 6, 6),
     )
-    ENEMY_SHOT_X_OFFSET_TABLE: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(-4, 4, -4, 4, -4, 4, -2),
-    )
-
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
@@ -158,13 +153,13 @@ class DemonAttackConstants(struct.PyTreeNode):
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
     BOMB_BURST_RATE_INTERVAL: int = struct.field(pytree_node=False, default=3)
-    BOMB_BURST_RATE_STARTS: Tuple[int, ...] = struct.field(
+    BOMB_BURST_RATE_BY_SLOT: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 2, 4, 6),
+        default=(0, 0, 1, 1, 2, 2, 3),
     )
-    BOMB_BURST_RATE_COUNTS: Tuple[int, ...] = struct.field(
+    BOMB_BURST_X_OFFSETS: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(2, 2, 2, 1),
+        default=(-4, 4, -4, 4, -4, 4, -2),
     )
     BOMB_BURST_Y_OFFSETS: Tuple[int, ...] = struct.field(
         pytree_node=False,
@@ -629,17 +624,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_and(source_ready, burst_timer <= 0),
         )
 
-        rate_starts = jnp.asarray(self.consts.BOMB_BURST_RATE_STARTS, dtype=jnp.int32)
-        rate_counts = jnp.asarray(self.consts.BOMB_BURST_RATE_COUNTS, dtype=jnp.int32)
         safe_burst_step = jnp.minimum(burst_step, self.consts.BOMB_BURST_RATES - 1)
-        rate_start = rate_starts[safe_burst_step]
-        rate_count = rate_counts[safe_burst_step]
-        slots_in_rate = jnp.logical_and(
-            slot_ids >= rate_start,
-            slot_ids < rate_start + rate_count,
-        )
+        rate_by_slot = jnp.asarray(self.consts.BOMB_BURST_RATE_BY_SLOT, dtype=jnp.int32)
+        slots_in_rate = rate_by_slot == safe_burst_step
 
-        x_offsets = jnp.asarray(self.consts.ENEMY_SHOT_X_OFFSET_TABLE, dtype=jnp.int32)
+        x_offsets = jnp.asarray(self.consts.BOMB_BURST_X_OFFSETS, dtype=jnp.int32)
         y_offsets = jnp.asarray(self.consts.BOMB_BURST_Y_OFFSETS, dtype=jnp.int32)
         fired_x = jnp.clip(
             base_x + x_offsets,
