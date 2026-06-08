@@ -141,7 +141,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(3, 4, 5, 5, 6, 6),
+        default=(2, 2, 2, 2, 3, 3),
     )
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -731,7 +731,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         any_player_hit = jnp.any(player_hit)
 
         lives = jnp.where(any_player_hit, jnp.maximum(state.lives - 1, 0), state.lives)
-        bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
+        # Remove the whole attack on impact so trailing particles
+        # cannot hit the player after the explosion again.
+        bomb_active = jnp.where(
+            any_player_hit,
+            jnp.zeros_like(state.bomb_active),
+            state.bomb_active,
+        )
 
         # If player hit, start explosion
         player_exploding = jnp.logical_or(state.player_exploding, any_player_hit)
