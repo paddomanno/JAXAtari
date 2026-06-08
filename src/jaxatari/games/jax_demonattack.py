@@ -1182,7 +1182,15 @@ class DemonAttackRenderer(JAXGameRenderer):
             spacing=8,
         )
 
-        return self.jr.render_from_palette(raster, self.PALETTE)
+        frame = self.jr.render_from_palette(raster, self.PALETTE)
+        return jnp.where(
+            jnp.logical_and(
+                state.player_exploding,
+                jnp.all(frame == 0, axis=-1, keepdims=True),
+            ),
+            jnp.uint8(255),
+            frame,
+        )
 
     def _draw_demons(self, raster, state):
         # Animation cycle: 4 frames, each for 8 steps. Total = 32 steps
