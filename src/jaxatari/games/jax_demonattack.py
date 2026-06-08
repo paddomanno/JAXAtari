@@ -297,10 +297,10 @@ class DemonAttackConstants(struct.PyTreeNode):
 
     # Boundaries
     BOUNDARY = 25
-    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # WIDTH - boundary - player's width
-    DEMON_MIN_X: int = struct.field(pytree_node=False, default=16)  # left boundary for demons
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=136) # right boundary for demons
+    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY) # left boundary for demons
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for player
+    DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for demons
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
