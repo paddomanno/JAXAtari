@@ -650,7 +650,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
-        key, demon_idx_key = jax.random.split(state.key)
+        key, demon_idx_key, burst_length_key = jax.random.split(state.key, 3)
         ready_demons = self._demons_ready(state)
 
         slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
@@ -733,7 +733,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             - self.consts.BOMB_SIZE[1] // 2
         )
 
-        burst_step = jnp.where(can_start_burst, 0, state.bomb_burst_step)
+        burst_length = jax.random.randint(
+            burst_length_key,
+            (),
+            0,
+            self.consts.BOMB_BURST_RATES + 1,
+            dtype=jnp.int32,
+        )
+        burst_step = jnp.where(
+            can_start_burst,
+            self.consts.BOMB_BURST_RATES - burst_length,
+            state.bomb_burst_step,
+        )
         burst_timer = jnp.where(can_start_burst, 0, state.bomb_burst_timer)
         burst_in_progress = burst_step < self.consts.BOMB_BURST_RATES
         fire_rate_now = jnp.logical_and(
