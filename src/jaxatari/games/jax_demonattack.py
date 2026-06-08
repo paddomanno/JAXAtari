@@ -238,8 +238,8 @@ def _get_default_asset_config() -> tuple:
 class DemonAttackConstants(struct.PyTreeNode):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
-    PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
+    HEIGHT: int = struct.field(pytree_node=False, default=192)
+    PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
     DEMON_SPEED: int = struct.field(pytree_node=False, default=1)
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
@@ -274,7 +274,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
 
     WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
-    WAVE_BOMB_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(2, 2, 3, 3, 4, 4))
+    WAVE_BOMB_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
     WAVE_BOMB_DROP_PROB_TABLE: Tuple[float, ...] = struct.field(
         pytree_node=False,
         default=(0.025, 0.035, 0.045, 0.055, 0.065, 0.08)
@@ -282,6 +282,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
 
     # Coordinates & Sizes. Sizes are (height, width).
+    PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
@@ -290,14 +291,14 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
     INIT_BUNKERS: int = struct.field(pytree_node=False, default=3)
-    BUNKER_X: int = struct.field(pytree_node=False, default=16)
+    BUNKER_X: int = struct.field(pytree_node=False, default=17)
     BUNKER_Y: int = struct.field(pytree_node=False, default=188)
-    BUNKER_SPACING: int = struct.field(pytree_node=False, default=7)
+    BUNKER_SPACING: int = struct.field(pytree_node=False, default=8)
 
     # Boundaries
-    BOUNDARY = 16
+    BOUNDARY = 25
     PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY - 7) # WIDTH - boundary - player's width
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # WIDTH - boundary - player's width
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=16)  # left boundary for demons
     DEMON_MAX_X: int = struct.field(pytree_node=False, default=136) # right boundary for demons
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
@@ -527,7 +528,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         wave_values = self._build_wave_start_values(wave_number)
 
         state = DemonAttackState(
-            player_x=jnp.array(76, dtype=jnp.int32),
+            player_x=jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
             laser_x=jnp.array(0, dtype=jnp.int32),
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
