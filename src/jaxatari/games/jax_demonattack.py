@@ -282,7 +282,6 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
     # Colors
-    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(206, 49, 173))
     BOMB_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(251, 135, 140))
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
