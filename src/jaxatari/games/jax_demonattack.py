@@ -1017,7 +1017,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: DemonAttackState) -> bool:
-        return state.game_over
+        return jnp.logical_and(
+            state.game_over,
+            jnp.logical_not(state.player_exploding),
+        )
 
 class DemonAttackRenderer(JAXGameRenderer):
     def __init__(self, consts: DemonAttackConstants = None, config: render_utils.RendererConfig = None):
