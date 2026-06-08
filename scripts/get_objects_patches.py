@@ -22,7 +22,7 @@ args = parser.parse_args()
 
 MAX_OBJECTS_PER_CATEGORY = 100
 BACKGROUND_RGB = np.array([0, 0, 0])
-IGNORED_OBJECT_CATEGORIES = ["NoObject", "Player", "PlayerMissile"]
+IGNORED_OBJECT_CATEGORIES = ["NoObject", "Player", "PlayerMissile", "EnemyPart", "EnemyMissile"]
 
 def save_rgb_array_as_png(rgb_array, filename):
     imageio.imwrite(filename, rgb_array)
@@ -99,6 +99,7 @@ class Renderer:
         self.env.reset()
         self.env.render()  # initialize pygame video system
 
+        self.num_skipped_waves = 0
         self.paused = False
         self.frame_by_frame = False
         self.next_frame = False
@@ -117,6 +118,8 @@ class Renderer:
         # self.env.set_ram(16, 6)
 
     def run(self):
+        self.skip_attract(self.env)
+
         self.running = True
         while self.running:
             self._handle_user_input()
@@ -172,9 +175,9 @@ class Renderer:
                     screen = self.env.unwrapped._ale.getScreenRGB()
                     save_objects_patches(
                         self.env.objects, screen, self.env.game_name)
-                    screen = np.repeat(np.repeat(screen, 6, axis=0), 6, axis=1)
-                    save_rgb_array_as_png(
-                        screen, f'patches/{self.env.game_name}_{self.frame}.png')
+                    # screen = np.repeat(np.repeat(screen, 6, axis=0), 6, axis=1)
+                    # save_rgb_array_as_png(
+                    #     screen, f'patches/{self.env.game_name}_{self.frame}.png')
 
                 elif event.key in self.keys2actions:  # env action                    
                     self.current_actions.add(self.keys2actions[event.key])
@@ -189,40 +192,39 @@ class Renderer:
         return asm_addr - 0x80
 
 
-    LEVEL = ram_addr(0xBE)  # 62
-    ENEMY_ROUND = ram_addr(0x80)  # 0
-    ENEMY_WAVE = ram_addr(0xEB)  # 107
+    # All addresses as ALE indices (asm_addr - 0x80)
+    # LEVEL = ram_addr(0xBE)  # 62
     APPEARED_ENEMIES = ram_addr(0x9B)  # 27
-    ENEMY_REG_1 = ram_addr(0xAF)  # 47
+    ENEMY_REG_1 = ram_addr(0xAF)  # 47 ← bits 7+6 = liveness, NOT position
     ENEMY_REG_2 = ram_addr(0xB0)  # 48
     ENEMY_REG_3 = ram_addr(0xB1)  # 49
+    SMALL_DEMON_REG = ram_addr(0xB2)  # 50
+    TELE_COUNTDOWN = ram_addr(0xBB)  # 59
+
+    skip_spawning = True
 
     def goto_next_level(self):
 
         ale = self.env._env.unwrapped.ale
 
-        self.skip_attract(ale, self.env, frames=200)
+        # we don't know the actual wave, so if you manually play to a new wave this is not accurate anymore
+        target = self.num_skipped_waves + 1 + 1
+        print(f"Performing Skip to wave {target} (?)")
+        self.num_skipped_waves += 1
 
-        TARGET_WAVE = self.current_wave + 1
-        self.current_wave += 1
-
-        print(f"Going to level {TARGET_WAVE}")
-
-        ale.setRAM(self.LEVEL, TARGET_WAVE)
         ale.setRAM(self.APPEARED_ENEMIES, 0)
 
         # Now end waves repeatedly until we're one wave before target
-        self.end_current_wave(ale, self.env, settle_frames=90)
+        self.end_current_wave(ale, self.env, settle_frames=100)
 
         # Step a frame to let the game register the change
         obs, _, _, _, _ = self.env.step(0)
 
-    def skip_attract(self, ale, env, frames=200):
-        """Fire through the attract/title screen to start the game."""
-        for _ in range(frames):
-            env.step(1)  # action 1 = FIRE
+        if self.skip_spawning:
+            for _ in range(150):
+                self.env.step(1)  # action 1 = FIRE
 
-    def end_current_wave(self, ale, env, settle_frames=90):
+    def end_current_wave(self, ale, env, settle_frames):
         """
         Trick the game into ending the current wave by:
         1. Setting AppearedEnemies = 8 (wave-complete threshold)
@@ -233,9 +235,19 @@ class Renderer:
         ale.setRAM(self.ENEMY_REG_1, 0)
         ale.setRAM(self.ENEMY_REG_2, 0)
         ale.setRAM(self.ENEMY_REG_3, 0)
+        ale.setRAM(self.SMALL_DEMON_REG, 0)  # no split-demon active
+        ale.setRAM(self.TELE_COUNTDOWN, 0)  # no teleport in progress
         for _ in range(settle_frames):
             env.step(0)  # NOOP — let the game animate and spawn new wave
 
+    def skip_attract(self, env, frames=200):
+        """Fire through the attract/title screen to start the game."""
+        for _ in range(frames):
+            env.step(1)  # action 1 = FIRE
+
+    def _get_ram_value_at(self, idx: int):
+        if self.ram is not None and 0 <= idx < len(self.ram): return self.ram[idx]
+        return 0
 
 if __name__ == "__main__":
     # renderer = Renderer(args.game)

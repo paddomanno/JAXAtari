@@ -198,6 +198,8 @@ class Renderer:
         terminated = False
         truncated = False
 
+        self.skip_attract(self.env.unwrapped.ale, self.env)
+
         while self.running:
             self._handle_user_input()
 
@@ -448,38 +450,41 @@ class Renderer:
         return asm_addr - 0x80
 
 
-    LEVEL = ram_addr(0xBE)  # 62
-    ENEMY_ROUND = ram_addr(0x80)  # 0
-    ENEMY_WAVE = ram_addr(0xEB)  # 107
+    # All addresses as ALE indices (asm_addr - 0x80)
+    # LEVEL = ram_addr(0xBE)  # 62
     APPEARED_ENEMIES = ram_addr(0x9B)  # 27
-    ENEMY_REG_1 = ram_addr(0xAF)  # 47
+    ENEMY_REG_1 = ram_addr(0xAF)  # 47 ← bits 7+6 = liveness, NOT position
     ENEMY_REG_2 = ram_addr(0xB0)  # 48
     ENEMY_REG_3 = ram_addr(0xB1)  # 49
+    SMALL_DEMON_REG = ram_addr(0xB2)  # 50
+    TELE_COUNTDOWN = ram_addr(0xBB)  # 59
+
+    skip_spawning = True
 
     def goto_next_level(self):
 
         ale = self.env.unwrapped.ale
 
-        self.skip_attract(ale, self.env, frames=200)
+        current_wave = self._get_ram_value_at(0)
+        target_wave = current_wave + 1
+        print(f"Current wave is {current_wave}, Target wave is {target_wave}")
 
-        TARGET_WAVE = self.current_wave + 1
-        self.current_wave += 1
-
-        ale.setRAM(self.LEVEL, TARGET_WAVE)
         ale.setRAM(self.APPEARED_ENEMIES, 0)
 
         # Now end waves repeatedly until we're one wave before target
-        self.end_current_wave(ale, self.env, settle_frames=90)
+        self.end_current_wave(ale, self.env, settle_frames=100)
 
         # Step a frame to let the game register the change
         obs, _, _, _, _ = self.env.step(0)
 
-    def skip_attract(self, ale, env, frames=200):
-        """Fire through the attract/title screen to start the game."""
-        for _ in range(frames):
-            env.step(1)  # action 1 = FIRE
+        if self.skip_spawning:
+            for _ in range(150):
+                self.env.step(1)  # action 1 = FIRE
 
-    def end_current_wave(self, ale, env, settle_frames=90):
+        landed_in_wave = self._get_ram_value_at(62)
+        print(f"Landed in wave {landed_in_wave}")
+
+    def end_current_wave(self, ale, env, settle_frames):
         """
         Trick the game into ending the current wave by:
         1. Setting AppearedEnemies = 8 (wave-complete threshold)
@@ -490,8 +495,15 @@ class Renderer:
         ale.setRAM(self.ENEMY_REG_1, 0)
         ale.setRAM(self.ENEMY_REG_2, 0)
         ale.setRAM(self.ENEMY_REG_3, 0)
+        ale.setRAM(self.SMALL_DEMON_REG, 0)  # no split-demon active
+        ale.setRAM(self.TELE_COUNTDOWN, 0)  # no teleport in progress
         for _ in range(settle_frames):
             env.step(0)  # NOOP — let the game animate and spawn new wave
+
+    def skip_attract(self, ale, env, frames=200):
+        """Fire through the attract/title screen to start the game."""
+        for _ in range(frames):
+            env.step(1)  # action 1 = FIRE
 
     def _render(self):
         self.window.fill((0, 0, 0))
