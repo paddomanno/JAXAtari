@@ -338,6 +338,7 @@ class DemonAttackState(struct.PyTreeNode):
     spawn_anim_timer: chex.Array
     spawn_pause_timer: chex.Array
     game_frozen: chex.Array
+    game_over: chex.Array
 
     step_counter: chex.Array
     key: chex.PRNGKey
@@ -551,6 +552,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             spawn_anim_timer=wave_values["spawn_anim_timer"],
             spawn_pause_timer=wave_values["spawn_pause_timer"],
             game_frozen=jnp.array(False, dtype=jnp.bool_),
+            game_over=jnp.array(False, dtype=jnp.bool_),
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=key,
         )
@@ -826,7 +828,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             )
         )
 
-        lives = jnp.where(player_hit, jnp.maximum(state.lives - 1, 0), state.lives)
+        bunker_available = state.lives > 0
+        lives = jnp.where(
+            jnp.logical_and(player_hit, bunker_available),
+            state.lives - 1,
+            state.lives,
+        )
+        game_over = jnp.logical_or(
+            state.game_over,
+            jnp.logical_and(player_hit, jnp.logical_not(bunker_available)),
+        )
         bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
 
         # If player hit, start explosion
@@ -842,6 +853,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             player_exploding=player_exploding,
             explosion_timer=explosion_timer,
             spawn_timer=spawn_timer,
+            game_over=game_over,
         )
 
         return self._spawn_next_demon_or_advance_wave(state)
@@ -1005,7 +1017,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: DemonAttackState) -> bool:
-        return state.lives <= 0
+        return state.game_over
 
 class DemonAttackRenderer(JAXGameRenderer):
     def __init__(self, consts: DemonAttackConstants = None, config: render_utils.RendererConfig = None):
@@ -1106,7 +1118,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                 lambda: r,
             )
 
-        raster = jax.lax.fori_loop(0, self.consts.INIT_BUNKERS, render_bunker, raster)
+        raster = jax.lax.fori_loop(0, self.consts.MAX_BUNKERS, render_bunker, raster)
 
         # Render player or explosion
         player_mask = jax.lax.select(state.player_exploding, self.SHAPE_MASKS["explosion"], self.SHAPE_MASKS["player"])
