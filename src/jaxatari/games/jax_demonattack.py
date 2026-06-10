@@ -331,9 +331,14 @@ class DemonAttackConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
+    DEMON_SPEED: int = struct.field(pytree_node=False, default=1)
+    RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
+    MAX_LIVING_DEMONS: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
+    SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
     SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
+    SPAWN_ANIM_X_OFFSET: int = struct.field(pytree_node=False, default=7)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
     DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=32)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
@@ -360,59 +365,34 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_NORMAL_REGISTER: int = struct.field(pytree_node=False, default=144)
     DEMON_SPAWN_REGISTER: int = struct.field(pytree_node=False, default=64)
     DEMON_RIGHT_BOUND_H_POSITION: int = struct.field(pytree_node=False, default=73)
-    DEMON_LEFT_BOUND_H_POSITION: int = struct.field(pytree_node=False, default=113)
     DEMON_RIGHT_SIDE_OFFSET: int = struct.field(pytree_node=False, default=8)
     DEMON_V_MIN_DISTANCE: int = struct.field(pytree_node=False, default=12)
     DEMON_V_MIN: int = struct.field(pytree_node=False, default=72)
     DEMON_V_MAX: int = struct.field(pytree_node=False, default=151)
-
-    # completing wave 84 freezes into a blank screen
-    MAX_WAVES: int = struct.field(pytree_node=False, default=84)
-    FREEZE_AFTER_MAX_WAVES: bool = struct.field(pytree_node=False, default=False)
+    MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
+    FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
-
+    WAVE_X_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=((42, 76, 110), (42, 110, 76), (30, 76, 122),
+                 (24, 76, 128), (24, 68, 124), (20, 76, 132))
+    )
+    WAVE_Y_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=((42, 42, 42), (38, 38, 38), (34, 46, 34),
+                 (32, 42, 52), (30, 40, 58), (28, 44, 64))
+    )
+    WAVE_DIR_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=((1, -1, 1), (1, -1, 1), (1, -1, 1),
+                 (1, -1, 1), (1, 1, -1), (1, -1, 1))
+    )
     WAVE_DEMON_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
-    WAVE_X_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=(
-            (42, 76, 110),
-            (42, 110, 76),
-            (30, 76, 122),
-            (24, 76, 128),
-            (24, 68, 124),
-            (20, 76, 132),
-        ),
-    )
-    WAVE_Y_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=(
-            (42, 42, 42),
-            (38, 38, 38),
-            (34, 46, 34),
-            (32, 42, 52),
-            (30, 40, 58),
-            (28, 44, 64),
-        ),
-    )
-    WAVE_DIR_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=(
-            (1, -1, 1),
-            (1, -1, 1),
-            (1, -1, 1),
-            (1, -1, 1),
-            (1, 1, -1),
-            (1, -1, 1),
-        ),
-    )
-    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(1, 1, 2, 2, 3, 3),
-    )
+    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
     WAVE_BOMB_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(2, 2, 3, 3, 4, 4))
     WAVE_BOMB_DROP_PROB_TABLE: Tuple[float, ...] = struct.field(
         pytree_node=False,
@@ -481,6 +461,7 @@ class DemonAttackState(struct.PyTreeNode):
     wave_pattern: chex.Array # Level pattern: 0..11, then repeating 8..11.
     wave_total: chex.Array
     wave_spawned: chex.Array
+    spawn_timer: chex.Array
     spawn_anim_timer: chex.Array
     spawn_pause_timer: chex.Array
     game_frozen: chex.Array
@@ -600,10 +581,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return _sub_demon_hpos_n(hpos, jnp.array(count, dtype=jnp.int32), 16)
 
     def _difficulty_value_for_pattern(
-            self,
-            table: Tuple,
-            wave_pattern: chex.Array,
-            dtype=jnp.int32,
+        self,
+        table: Tuple,
+        wave_pattern: chex.Array,
+        dtype=jnp.int32,
     ) -> chex.Array:
         """Read a value from a six-entry, pair-shared difficulty table."""
         values = jnp.asarray(table, dtype=dtype)
@@ -676,6 +657,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
             wave_spawned=jnp.array(0, dtype=jnp.int32),
             **self._initial_demon_values(),
+            spawn_timer=jnp.array(0, dtype=jnp.int32),
             spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
@@ -687,8 +669,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _advance_wave(self, state: DemonAttackState) -> DemonAttackState:
         next_wave_number = state.wave_number + 1
 
-        should_freeze = jnp.array(self.consts.FREEZE_AFTER_MAX_WAVES, dtype=jnp.bool_) & (
-            next_wave_number >= self.consts.MAX_WAVES
+        should_freeze = jnp.array(self.consts.FREEZE_AFTER_MAX_ROM_WAVES, dtype=jnp.bool_) & (
+            next_wave_number >= self.consts.MAX_ROM_WAVES
         )
 
         return jax.lax.cond(
@@ -732,6 +714,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_pattern=self._resolve_wave_pattern(wave_number),
             wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
             wave_spawned=jnp.array(0, dtype=jnp.int32),
+            spawn_timer=jnp.array(0, dtype=jnp.int32),
             spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
@@ -795,8 +778,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return observation, state, reward, done, info
 
     def _player_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
-        move_right = (action == Action.RIGHT) | (action == Action.RIGHTFIRE)
-        move_left = (action == Action.LEFT) | (action == Action.LEFTFIRE)
+        move_right = jnp.logical_or(action == Action.RIGHT, action == Action.RIGHTFIRE)
+        move_left = jnp.logical_or(action == Action.LEFT, action == Action.LEFTFIRE)
 
         dx = jax.lax.select(
             move_right,
@@ -832,8 +815,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
         # Fire laser if not active and FIRE action
-        fire = (action == Action.FIRE) | (action == Action.RIGHTFIRE) | (action == Action.LEFTFIRE)
-        should_fire = fire & ~state.laser_active
+        fire = jnp.logical_or(
+            jnp.logical_or(action == Action.FIRE, action == Action.RIGHTFIRE),
+            action == Action.LEFTFIRE,
+        )
+        should_fire = jnp.logical_and(fire, jnp.logical_not(state.laser_active))
 
         laser_x = jax.lax.select(
             should_fire,
@@ -845,7 +831,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.array(self.consts.PLAYER_Y + self.consts.PLAYER_LASER_DEPTH, dtype=jnp.int32),
             state.laser_y,
         )
-        laser_active = should_fire | state.laser_active
+        laser_active = jnp.logical_or(should_fire, state.laser_active)
 
         # Move laser
         laser_speed = self._difficulty_value_for_pattern(
@@ -854,7 +840,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         laser_y = jax.lax.select(laser_active, laser_y - laser_speed, laser_y)
 
         # Deactivate if out of bounds
-        laser_active = laser_active & (laser_y > 0)
+        laser_active = jnp.logical_and(laser_active, laser_y > 0)
 
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
@@ -863,9 +849,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
 
-        demon_speed = self._difficulty_value_for_pattern(
-            self.consts.WAVE_DEMON_SPEED_TABLE, state.wave_pattern
-        )
         can_move = self._demons_ready(state)
 
         target_v = self._new_demon_v_position(state, selected)
@@ -1016,7 +999,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.wave_pattern,
             jnp.float32,
         )
-        should_drop = (~state.bomb_active) & jnp.any(can_drop_bomb) & (jax.random.uniform(drop_key) < drop_prob)
+        should_drop = jnp.logical_and(
+            jnp.logical_and(jnp.logical_not(state.bomb_active), jnp.any(can_drop_bomb)),
+            jax.random.uniform(drop_key) < drop_prob,
+        )
 
         # Pick a random demon index
         demon_idx = jax.random.randint(demon_idx_key, (), 0, self.consts.MAX_DEMONS)
@@ -1090,6 +1076,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             )
         )
 
+        spawn_timer = jnp.where(
+            demon_killed,
+            jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
+            jnp.maximum(state.spawn_timer - 1, 0),
+        )
+
         killed = state.demons_alive & ~demons_alive
 
         # Bomb vs Player
@@ -1131,6 +1123,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_active=bomb_active,
             player_exploding=player_exploding,
             explosion_timer=explosion_timer,
+            spawn_timer=spawn_timer,
             game_over=game_over,
         )
 
@@ -1201,7 +1194,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def observation_space(self) -> spaces.Dict:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
         demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS,
-            screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
+                                               screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
 
         return spaces.Dict({
             "player": object_space,
@@ -1431,9 +1424,11 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         demon_mask = demon_masks[demon_anim_idx]
 
-        spawn_anim_total = self.consts.DEMON_TELEPORT_DURATION
+        spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
         ids = jnp.arange(self.consts.MAX_DEMONS)
-        spacing = (self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X) // (self.consts.MAX_DEMONS + 1)
+        spacing = (
+            self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X
+        ) // (self.consts.MAX_DEMONS + 1)
         spawn_target_x = self.consts.DEMON_MIN_X + (ids + 1) * spacing
 
         def render_demon(i, r):
@@ -1441,7 +1436,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
             elapsed = spawn_anim_total - state.spawn_anim_timer[i]
             spawn_frame = jnp.clip(
-                (elapsed * self.consts.SPAWN_ANIM_FRAMES) // spawn_anim_total,
+                elapsed // self.consts.SPAWN_ANIM_FRAME_DURATION,
                 0,
                 self.consts.SPAWN_ANIM_FRAMES - 1,
             )
@@ -1450,21 +1445,31 @@ class DemonAttackRenderer(JAXGameRenderer):
             spawn_right_mask = self.SHAPE_MASKS["enemy_spawn_right"][spawn_frame]
 
             def render_spawn():
-                spawn_max_x = min(self.consts.DEMON_MAX_X, self.consts.WIDTH - self.consts.SPAWN_ANIM_WIDTH)
+                spawn_max_x = jnp.minimum(
+                    jnp.array(self.consts.DEMON_MAX_X, dtype=jnp.int32),
+                    jnp.array(self.consts.WIDTH - self.consts.SPAWN_ANIM_WIDTH, dtype=jnp.int32),
+                )
+
                 target_x = jnp.clip(
                     spawn_target_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
                     self.consts.DEMON_MIN_X,
                     spawn_max_x,
                 )
-                last_step = jnp.array(spawn_anim_total - 1, dtype=jnp.int32)
+
+                last_step = jnp.maximum(
+                    jnp.array(spawn_anim_total - 1, dtype=jnp.int32),
+                    jnp.array(1, dtype=jnp.int32),
+                )
+
                 left_render_x = (
-                    self.consts.DEMON_MIN_X * (last_step - elapsed)
-                    + target_x * elapsed
-                ) // last_step
+                                        self.consts.DEMON_MIN_X * (last_step - elapsed)
+                                        + target_x * elapsed
+                                ) // last_step
+
                 right_render_x = (
-                    spawn_max_x * (last_step - elapsed)
-                    + target_x * elapsed
-                ) // last_step
+                                         spawn_max_x * (last_step - elapsed)
+                                         + target_x * elapsed
+                                 ) // last_step
 
                 spawn_raster = self.jr.render_at_clipped(
                     r,
