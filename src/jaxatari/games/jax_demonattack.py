@@ -997,7 +997,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.game_over,
             jnp.logical_and(any_player_hit, jnp.logical_not(bunker_available)),
         )
-        bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
+        bomb_active = jnp.where(
+            any_player_hit,
+            jnp.zeros_like(state.bomb_active),
+            state.bomb_active,
+        )
 
         # If player hit, start explosion
         player_exploding = jnp.logical_or(state.player_exploding, any_player_hit)
@@ -1229,7 +1233,6 @@ class DemonAttackRenderer(JAXGameRenderer):
         )
 
         # 2. Create procedural assets
-        explosion_sprite = _create_explosion_sprite(self.consts)
         digit_sprites = _create_digit_sprites(self.consts)
 
         # Update asset config with procedural data
