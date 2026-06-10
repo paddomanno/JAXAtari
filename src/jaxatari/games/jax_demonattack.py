@@ -376,6 +376,43 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
+    WAVE_X_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=(
+            (42, 76, 110),
+            (42, 110, 76),
+            (30, 76, 122),
+            (24, 76, 128),
+            (24, 68, 124),
+            (20, 76, 132),
+        ),
+    )
+    WAVE_Y_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=(
+            (42, 42, 42),
+            (38, 38, 38),
+            (34, 46, 34),
+            (32, 42, 52),
+            (30, 40, 58),
+            (28, 44, 64),
+        ),
+    )
+    WAVE_DIR_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
+        pytree_node=False,
+        default=(
+            (1, -1, 1),
+            (1, -1, 1),
+            (1, -1, 1),
+            (1, -1, 1),
+            (1, 1, -1),
+            (1, -1, 1),
+        ),
+    )
+    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(1, 1, 2, 2, 3, 3),
+    )
     WAVE_BOMB_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(2, 2, 3, 3, 4, 4))
     WAVE_BOMB_DROP_PROB_TABLE: Tuple[float, ...] = struct.field(
         pytree_node=False,
@@ -511,6 +548,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             + jnp.mod(wave_number - INITIAL_WAVE_PATTERNS, repeating_pattern_count),
         )
 
+    def _wave_level_mod12(self, wave_number: chex.Array) -> chex.Array:
+        return self._resolve_wave_pattern(wave_number).astype(jnp.int32)
+
     @staticmethod
     def _difficulty_index_for_pattern(wave_pattern: chex.Array) -> chex.Array:
         """Map two consecutive patterns to one shared difficulty-table entry."""
@@ -588,25 +628,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return wave_pattern, demons_x, demons_y, demons_dir
 
-    def _spawn_animation_duration(self) -> chex.Array:
-        """Return the complete spawn animation duration in frames."""
-        return jnp.array(
-            self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION,
-            dtype=jnp.int32,
+    def _demon_h_to_x(self, hpos: chex.Array) -> chex.Array:
+        return _demon_hpos_to_x(
+            hpos,
+            self.consts.DEMON_SPAWN_LEFT_H_POSITION,
+            self.consts.DEMON_MIN_X - self.consts.DEMON_SIZE[1],
+            self.consts.DEMON_RIGHT_BOUND_H_POSITION,
+            self.consts.DEMON_MAX_X,
         )
-
-    def _build_wave_start_values(self, wave_number: chex.Array) -> dict:
-        """Build all wave fields needed by reset and wave transitions."""
-        wave_pattern, demons_x, demons_y, demons_dir = self._formation_for_wave(
-            wave_number
-        )
-
-        # Slot arrays always have MAX_DEMONS entries, but only the first active slot
-        # participates in movement/collisions until later refills activate more.
-        wave_total = jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32)
-        initial_alive_count = jnp.minimum(wave_total, jnp.array(1, dtype=jnp.int32))
-        slot_ids = jnp.arange(self.consts.MAX_DEMONS)
-        demons_alive = slot_ids < initial_alive_count
 
     def _demon_x_to_h(self, x: chex.Array) -> chex.Array:
         return _demon_x_to_hpos(
@@ -641,23 +670,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _initialize_wave_state(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
         """Replace the previous wave state with a freshly initialized ROM-style wave."""
-        wave_values = self._build_wave_start_values(wave_number)
-
         state = state.replace(
-            # Wave metadata from the second snippet
-            wave_number=wave_values["wave_number"],
-            wave_pattern=wave_values["wave_pattern"],
-            wave_total=wave_values["wave_total"],
+            wave_number=wave_number,
+            wave_pattern=self._resolve_wave_pattern(wave_number),
+            wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
             wave_spawned=jnp.array(0, dtype=jnp.int32),
-
-            # ROM-style internal demon state from the first snippet
             **self._initial_demon_values(),
-
-            # Spawn timers from the second snippet, but compatible with ROM-style sync
-            spawn_anim_timer=wave_values["spawn_anim_timer"],
-            spawn_pause_timer=wave_values["spawn_pause_timer"],
-
-            # Shared reset fields
+            spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             bomb_active=jnp.array(False, dtype=jnp.bool_),
         )
@@ -694,18 +714,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[DemonAttackObservation, DemonAttackState]:
         wave_number = jnp.array(0, dtype=jnp.int32)
-        wave_values = self._build_wave_start_values(wave_number)
 
         state = DemonAttackState(
             player_x=jnp.array(76, dtype=jnp.int32),
             laser_x=jnp.array(0, dtype=jnp.int32),
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
-            demons_x=wave_values["demons_x"],
-            demons_y=wave_values["demons_y"],
-            demons_dir=wave_values["demons_dir"],
-            demons_y_dir=wave_values["demons_y_dir"],
-            demons_alive=wave_values["demons_alive"],
+            **self._initial_demon_values(),
             bomb_x=jnp.array(0, dtype=jnp.int32),
             bomb_y=jnp.array(0, dtype=jnp.int32),
             bomb_active=jnp.array(False, dtype=jnp.bool_),
@@ -713,13 +728,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             lives=jnp.array(self.consts.INIT_BUNKERS, dtype=jnp.int32),
             player_exploding=jnp.array(False, dtype=jnp.bool_),
             explosion_timer=jnp.array(0, dtype=jnp.int32),
-            wave_number=wave_values["wave_number"],
-            wave_pattern=wave_values["wave_pattern"],
-            wave_total=wave_values["wave_total"],
-            wave_spawned=wave_values["wave_spawned"],
-            spawn_timer=wave_values["spawn_timer"],
-            spawn_anim_timer=wave_values["spawn_anim_timer"],
-            spawn_pause_timer=wave_values["spawn_pause_timer"],
+            wave_number=wave_number,
+            wave_pattern=self._resolve_wave_pattern(wave_number),
+            wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
+            wave_spawned=jnp.array(0, dtype=jnp.int32),
+            spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             game_over=jnp.array(False, dtype=jnp.bool_),
             step_counter=jnp.array(0, dtype=jnp.int32),
@@ -1117,76 +1131,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_active=bomb_active,
             player_exploding=player_exploding,
             explosion_timer=explosion_timer,
-            spawn_timer=spawn_timer,
             game_over=game_over,
         )
 
-        return self._spawn_next_demon_or_advance_wave(state)
+        return self._refill_or_advance_wave(state)
 
-    def _spawn_next_demon_or_advance_wave(
+    def _refill_or_advance_wave(
         self, state: DemonAttackState
     ) -> DemonAttackState:
-        """Fill one free demon slot or advance after the wave is fully cleared."""
-        spawn_x = self._difficulty_value_for_pattern(
-            self.consts.WAVE_X_TABLE, state.wave_pattern
-        )
-        spawn_y = self._difficulty_value_for_pattern(
-            self.consts.WAVE_Y_TABLE, state.wave_pattern
-        )
-        spawn_dir = self._difficulty_value_for_pattern(
-            self.consts.WAVE_DIR_TABLE, state.wave_pattern
-        )
-
-        live_count = jnp.sum(state.demons_alive.astype(jnp.int32))
-        max_living = jnp.array(self.consts.MAX_LIVING_DEMONS, dtype=jnp.int32)
-
-        # Refill is bounded by both the on-screen demon cap and the remaining wave
-        # budget. Only permits one new demon per refill event.
-        screen_capacity = jnp.maximum(max_living - live_count, 0)
-        wave_capacity = jnp.maximum(state.wave_total - state.wave_spawned, 0)
-        can_spawn = state.spawn_timer <= 0
-
-        spawn_count = jnp.where(
-            can_spawn,
-            jnp.minimum(
-                jnp.minimum(screen_capacity, wave_capacity),
-                jnp.array(1, dtype=jnp.int32),
-            ),
-            jnp.array(0, dtype=jnp.int32),
-        )
-
-        # Select the first dead slot
-        eligible_dead_slots = jnp.logical_not(state.demons_alive)
-        newly_spawned = jnp.logical_and(
-            spawn_count > 0,
-            jnp.logical_and(
-                eligible_dead_slots,
-                jnp.arange(self.consts.MAX_DEMONS) == jnp.argmax(eligible_dead_slots),
-            ),
-        )
-        spawn_y_dir = jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32)
-        spawn_anim_total = self._spawn_animation_duration()
-
-        # Newly refilled demons reset to the wave formation coordinates, replay the
-        # spawn animation, and then wait for the post-spawn movement pause.
-        refilled_state = state.replace(
-            demons_alive=jnp.logical_or(state.demons_alive, newly_spawned),
-            demons_x=jnp.where(newly_spawned, spawn_x, state.demons_x),
-            demons_y=jnp.where(newly_spawned, spawn_y, state.demons_y),
-            demons_dir=jnp.where(newly_spawned, spawn_dir, state.demons_dir),
-            demons_y_dir=jnp.where(newly_spawned, spawn_y_dir, state.demons_y_dir),
-            spawn_anim_timer=jnp.where(newly_spawned, spawn_anim_total, state.spawn_anim_timer),
-            spawn_pause_timer=jnp.where(newly_spawned, self.consts.SPAWN_MOVE_PAUSE, state.spawn_pause_timer),
-            spawn_timer=jnp.where(
-                spawn_count > 0,
-                jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
-                state.spawn_timer,
-            ),
-            wave_spawned=state.wave_spawned + spawn_count,
-        )
-
-        # The wave only finishes once its full demon budget has spawned and no
-        # active demons remain on screen.
         wave_finished = jnp.logical_and(
             state.wave_spawned >= state.wave_total,
             jnp.logical_not(jnp.any(state.demons_alive)),
