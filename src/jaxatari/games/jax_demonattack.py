@@ -297,11 +297,6 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(-4, 4, -4, 4, -4, 4, -2),
     )
-    BOMB_BURST_Y_OFFSETS: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        # Bombs start directly below the demon; timing creates their Y spacing.
-        default=(0, 0, 0, 0, 0, 0, 0),
-    )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(0, 0, 1, 0, 0, -1, 0),
@@ -907,10 +902,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.BOMB_BURST_X_OFFSETS,
             dtype=jnp.int32,
         )
-        y_offsets = jnp.asarray(
-            self.consts.BOMB_BURST_Y_OFFSETS,
-            dtype=jnp.int32,
-        )
         fired_x = jnp.clip(
             base_x + x_offsets,
             self.consts.BOUNDARY,
@@ -919,7 +910,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         fired_y = (
             state.demons_y[source_idx]
             + self.consts.DEMON_SIZE[0]
-            + y_offsets
         )
 
         should_activate_slot = jnp.logical_and(fire_rate_now, slots_in_rate)
