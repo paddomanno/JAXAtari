@@ -26,29 +26,6 @@ DIFFICULTY_TABLE_NAMES = (
 )
 FORMATION_TABLE_NAMES = ("WAVE_X_TABLE", "WAVE_Y_TABLE", "WAVE_DIR_TABLE")
 
-def _create_explosion_sprite(consts: "DemonAttackConstants") -> jnp.ndarray:
-    mask = jnp.array([
-        [1, 0, 0, 1, 0, 0, 1],
-        [0, 1, 0, 1, 0, 1, 0],
-        [0, 0, 1, 0, 1, 0, 0],
-        [1, 1, 0, 0, 0, 1, 1],
-        [0, 1, 0, 1, 0, 1, 0],
-        [1, 0, 1, 0, 1, 0, 1],
-        [1, 0, 1, 0, 1, 0, 1],
-        [1, 0, 1, 1, 0, 0, 1],
-        [0, 1, 1, 1, 0, 1, 0],
-        [0, 0, 1, 0, 1, 0, 0],
-        [1, 1, 0, 0, 0, 1, 1],
-        [0, 1, 0, 1, 0, 1, 0],
-    ], dtype=jnp.uint8)
-
-    color = jnp.array((*consts.PLAYER_COLOR, 255), dtype=jnp.uint8)
-    mask_rgba = jnp.where(mask[:, :, None] == 1, color, jnp.zeros(4, dtype=jnp.uint8))
-    sprite = jnp.zeros((*consts.PLAYER_SIZE, 4), dtype=jnp.uint8)
-    sprite = sprite.at[:].set(mask_rgba)
-
-    return sprite
-
 def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
     digits = np.zeros((10, 8, 8, 4), dtype=np.uint8)
     color = np.array((*consts.SCORE_COLOR, 255), dtype=np.uint8)
@@ -284,6 +261,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=2)
+    PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
@@ -317,7 +295,6 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
     # Colors
-    PLAYER_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(206, 49, 173))
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
@@ -1024,7 +1001,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # If player hit, start explosion
         player_exploding = jnp.logical_or(state.player_exploding, any_player_hit)
-        explosion_timer = jnp.where(any_player_hit, 20, state.explosion_timer)
+        explosion_timer = jnp.where(
+            any_player_hit,
+            self.consts.PLAYER_DEATH_ANIMATION_DURATION,
+            state.explosion_timer,
+        )
 
         state = state.replace(
             demons_alive=demons_alive,
@@ -1252,7 +1233,6 @@ class DemonAttackRenderer(JAXGameRenderer):
         digit_sprites = _create_digit_sprites(self.consts)
 
         # Update asset config with procedural data
-        final_asset_config.append({'name': 'explosion', 'type': 'procedural', 'data': explosion_sprite})
         final_asset_config.append({'name': 'score_digits', 'type': 'procedural', 'data': digit_sprites})
 
         # 3. Bake assets
@@ -1304,9 +1284,40 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_BUNKERS, render_bunker, raster)
 
-        # Render player or explosion
-        player_mask = jax.lax.select(state.player_exploding, self.SHAPE_MASKS["explosion"], self.SHAPE_MASKS["player"])
-        raster = self.jr.render_at(raster, state.player_x, self.consts.PLAYER_Y, player_mask)
+        # Render player or death animation
+        death_masks = self.SHAPE_MASKS["player_death_animation"]
+        death_frame = jnp.clip(
+            (
+                (self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer)
+                * death_masks.shape[0]
+            )
+            // self.consts.PLAYER_DEATH_ANIMATION_DURATION,
+            0,
+            death_masks.shape[0] - 1,
+        )
+        death_x = state.player_x + (
+            self.consts.PLAYER_SIZE[1] - death_masks.shape[2]
+        ) // 2
+        death_y = (
+            self.consts.PLAYER_Y
+            + self.consts.PLAYER_SIZE[0]
+            - death_masks.shape[1]
+        )
+        raster = jax.lax.cond(
+            state.player_exploding,
+            lambda: self.jr.render_at(
+                raster,
+                death_x,
+                death_y,
+                death_masks[death_frame],
+            ),
+            lambda: self.jr.render_at(
+                raster,
+                state.player_x,
+                self.consts.PLAYER_Y,
+                self.SHAPE_MASKS["player"],
+            ),
+        )
 
         # Render demons
         raster = self._draw_demons(raster, state)
@@ -1323,14 +1334,18 @@ class DemonAttackRenderer(JAXGameRenderer):
             state.laser_y,
             self.consts.PLAYER_Y + self.consts.PLAYER_LASER_DEPTH
         )
-        raster = self.jr.render_at(raster, laser_render_x, laser_render_y, laser_mask)
+        raster = jax.lax.cond(
+            jnp.logical_not(state.player_exploding),
+            lambda: self.jr.render_at(raster, laser_render_x, laser_render_y, laser_mask),
+            lambda: raster,
+        )
 
         # Render enemy shot particles.
         bomb_mask = self.SHAPE_MASKS["projectile_demon"]
 
         def render_bomb(i, r):
             return jax.lax.cond(
-                state.bomb_active[i],
+                jnp.logical_and(state.bomb_active[i], jnp.logical_not(state.player_exploding)),
                 lambda: self.jr.render_at(r, state.bomb_x[i], state.bomb_y[i], bomb_mask),
                 lambda: r,
             )
