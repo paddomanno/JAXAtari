@@ -262,6 +262,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=2)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
+    PLAYER_DEATH_FLASH_DURATION: int = struct.field(pytree_node=False, default=20)
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
@@ -1386,12 +1387,24 @@ class DemonAttackRenderer(JAXGameRenderer):
         )
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
+        death_elapsed = (
+            self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer
+        )
+        flash_frames_left = jnp.clip(
+            self.consts.PLAYER_DEATH_FLASH_DURATION - death_elapsed,
+            0,
+            self.consts.PLAYER_DEATH_FLASH_DURATION,
+        )
+        flash_intensity = (
+            jnp.array(255, dtype=jnp.int32) * flash_frames_left
+        ) // self.consts.PLAYER_DEATH_FLASH_DURATION
+        flash_color = jnp.asarray(flash_intensity, dtype=jnp.uint8)
         return jnp.where(
             jnp.logical_and(
-                state.player_exploding,
+                jnp.logical_and(state.player_exploding, flash_frames_left > 0),
                 jnp.all(frame == 0, axis=-1, keepdims=True),
             ),
-            jnp.uint8(255),
+            flash_color,
             frame,
         )
 
