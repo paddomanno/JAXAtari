@@ -772,6 +772,19 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
+        """Advance enemy bomb movement and burst-firing state by one frame.
+
+        Existing bombs move downward at the speed selected for the current wave
+        pattern and receive their slot-specific horizontal jitter. Bombs that
+        reach the bunker boundary are deactivated.
+
+        The method also advances the enemy firing scheduler. Once the wave's
+        action delay has elapsed, no previous bombs remain active, and at least
+        one demon is ready, a random roll may begin a burst from a selected
+        demon. Each burst retains that source demon and activates the bomb slots
+        assigned to its current rate after the configured interval. The burst
+        source is released when all rates have been processed.
+        """
         key, drop_key, demon_idx_key, burst_length_key = jax.random.split(
             state.key, 4
         )
