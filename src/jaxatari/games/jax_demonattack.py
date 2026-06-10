@@ -1012,13 +1012,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         bunker_available = state.lives > 0
         lives = jnp.where(
-            jnp.logical_and(player_hit, bunker_available),
+            jnp.logical_and(any_player_hit, bunker_available),
             state.lives - 1,
             state.lives,
         )
         game_over = jnp.logical_or(
             state.game_over,
-            jnp.logical_and(player_hit, jnp.logical_not(bunker_available)),
+            jnp.logical_and(any_player_hit, jnp.logical_not(bunker_available)),
         )
         bomb_active = jnp.logical_and(state.bomb_active, jnp.logical_not(player_hit))
 
