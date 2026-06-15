@@ -207,96 +207,6 @@ def _get_default_asset_config() -> tuple:
         {'name': 'bunker', 'type': 'single', 'file': 'Bunker.npy'},
     )
 
-def _add_demon_hpos(hpos: chex.Array) -> chex.Array:
-    hpos = (hpos + 16) & 255
-    return jnp.where(
-        (hpos >= 128) & (hpos < 144),
-        (hpos - 241) & 255,
-        hpos,
-    ).astype(jnp.int32)
-
-def _sub_demon_hpos(hpos: chex.Array) -> chex.Array:
-    hpos = (hpos - 16) & 255
-    return jnp.where(
-        (hpos < 128) & (hpos >= 112),
-        (hpos + 241) & 255,
-        hpos,
-    ).astype(jnp.int32)
-
-def _sub_demon_hpos_n(hpos: chex.Array, count: chex.Array, max_count: int) -> chex.Array:
-    def body(value, step):
-        return jnp.where(step < count, _sub_demon_hpos(value), value), None
-
-    result, _ = jax.lax.scan(body, hpos, jnp.arange(max_count, dtype=jnp.int32))
-    return result.astype(jnp.int32)
-
-def _demon_hpos_to_x(
-    hpos: chex.Array,
-    start_hpos: int,
-    start_x: int,
-    fallback_hpos: int,
-    fallback_x: int,
-) -> chex.Array:
-    target = hpos & 255
-
-    def sub_body(carry, _):
-        current, x, result, found = carry
-        match = current == target
-        result = jnp.where(match & ~found, x, result)
-        return (
-            _sub_demon_hpos(current),
-            x + 1,
-            result,
-            found | match,
-        ), None
-
-    (_, _, result, found), _ = jax.lax.scan(
-        sub_body,
-        (
-            jnp.full_like(target, start_hpos),
-            jnp.full_like(target, start_x),
-            jnp.full_like(target, start_x),
-            jnp.zeros_like(target, dtype=jnp.bool_),
-        ),
-        jnp.arange(241, dtype=jnp.int32),
-    )
-
-    def add_body(carry, step):
-        current, fallback_step = carry
-        fallback_step = jnp.where(current == target, step, fallback_step)
-        return (_add_demon_hpos(current), fallback_step), None
-
-    (_, fallback_step), _ = jax.lax.scan(
-        add_body,
-        (jnp.full_like(target, fallback_hpos), jnp.zeros_like(target)),
-        jnp.arange(241, dtype=jnp.int32),
-    )
-    fallback = jnp.where(
-        fallback_step <= fallback_x,
-        fallback_x - fallback_step,
-        fallback_x + 241 - fallback_step,
-    )
-    return jnp.where(found, result, fallback).astype(jnp.int32)
-
-def _demon_x_to_hpos(x: chex.Array, start_hpos: int, start_x: int) -> chex.Array:
-    target = x.astype(jnp.int32)
-
-    def body(carry, _):
-        current_hpos, current_x, result = carry
-        result = jnp.where(current_x == target, current_hpos, result)
-        return (_sub_demon_hpos(current_hpos), current_x + 1, result), None
-
-    (_, _, result), _ = jax.lax.scan(
-        body,
-        (
-            jnp.full_like(target, start_hpos),
-            jnp.full_like(target, start_x),
-            jnp.full_like(target, start_hpos),
-        ),
-        jnp.arange(241, dtype=jnp.int32),
-    )
-    return result.astype(jnp.int32)
-
 class DemonAttackConstants(struct.PyTreeNode):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -325,22 +235,16 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(1, 0, 0),
     )
-    DEMON_INITIAL_V_POSITION: Tuple[int, int, int] = struct.field(
+    DEMON_INITIAL_Y: Tuple[int, int, int] = struct.field(
         pytree_node=False,
-        default=(150, 135, 120),
+        default=(26, 41, 56),
     )
     DEMON_INITIAL_RANDOM: int = struct.field(pytree_node=False, default=234)
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
-    DEMON_SPAWN_LEFT_H_POSITION: int = struct.field(pytree_node=False, default=112)
-    DEMON_SPAWN_RIGHT_H_POSITION: int = struct.field(pytree_node=False, default=169)
     DEMON_NORMAL_REGISTER: int = struct.field(pytree_node=False, default=144)
     DEMON_SPAWN_REGISTER: int = struct.field(pytree_node=False, default=64)
-    DEMON_RIGHT_BOUND_H_POSITION: int = struct.field(pytree_node=False, default=73)
-    DEMON_RIGHT_SIDE_OFFSET: int = struct.field(pytree_node=False, default=8)
-    DEMON_V_MIN_DISTANCE: int = struct.field(pytree_node=False, default=12)
-    DEMON_V_MIN: int = struct.field(pytree_node=False, default=72)
-    DEMON_V_MAX: int = struct.field(pytree_node=False, default=151)
+    DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -428,11 +332,8 @@ class DemonAttackState(struct.PyTreeNode):
     demons_x: chex.Array
     demons_y: chex.Array  # Shape: (MAX_DEMONS,)
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
-    demon_left_h_parameters: chex.Array
-    demon_left_h_position: chex.Array
-    demon_right_h_position: chex.Array
-    demon_v_position: chex.Array
-    demon_v_parameters: chex.Array
+    demon_x_motion_accumulator: chex.Array
+    demon_y_motion_accumulator: chex.Array
     demon_register: chex.Array
     demon_teleport: chex.Array
     demon_teleport_timer: chex.Array
@@ -542,13 +443,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         zeros = jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32)
         return dict(
             demons_x=zeros,
-            demons_y=zeros,
+            demons_y=jnp.asarray(self.consts.DEMON_INITIAL_Y, dtype=jnp.int32),
             demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_left_h_parameters=zeros,
-            demon_left_h_position=zeros,
-            demon_right_h_position=zeros,
-            demon_v_position=jnp.asarray(self.consts.DEMON_INITIAL_V_POSITION, dtype=jnp.int32),
-            demon_v_parameters=zeros,
+            demon_x_motion_accumulator=zeros,
+            demon_y_motion_accumulator=zeros,
             demon_register=jnp.asarray(self.consts.DEMON_INITIAL_REGISTER, dtype=jnp.int32),
             demon_teleport=jnp.array(self.consts.DEMON_INITIAL_TELEPORT, dtype=jnp.int32),
             demon_teleport_timer=jnp.array(self.consts.DEMON_INITIAL_TELEPORT_TIMER, dtype=jnp.int32),
@@ -561,25 +459,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         carry = ((shifted ^ random) // 64) & 1
         return (shifted | carry).astype(jnp.int32)
 
-    def _new_demon_v_position(self, state: DemonAttackState, demon: chex.Array) -> chex.Array:
+    def _new_demon_y(self, state: DemonAttackState, demon: chex.Array) -> chex.Array:
         def first():
-            return (jnp.array(self.consts.DEMON_V_MAX, dtype=jnp.int32) + state.demon_v_position[1]) // 2
+            return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + state.demons_y[1]) // 2
 
         def second():
-            return (state.demon_v_position[0] + state.demon_v_position[2]) // 2
+            return (state.demons_y[0] + state.demons_y[2]) // 2
 
         def third():
-            return (state.demon_v_position[1] + self._new_demon_v_shift(state.wave_number)) // 2
+            return (
+                state.demons_y[1]
+                + jnp.array(self.consts.DEMON_MAX_Y, dtype=jnp.int32)
+            ) // 2
 
         return jax.lax.switch(demon, (first, second, third)).astype(jnp.int32)
-
-    def _new_demon_v_shift(self, wave_number: chex.Array) -> chex.Array:
-        # Resolve every per-wave table once so reset, wave advance, and respawn use
-        # the same canonical formation for the current wave.
-        return jnp.array(44, dtype=jnp.int32) - self._wave_level_mod12(wave_number) * 2
-
-    def _sub_demon_h_n(self, hpos: chex.Array, count: int) -> chex.Array:
-        return _sub_demon_hpos_n(hpos, jnp.array(count, dtype=jnp.int32), 16)
 
     def _difficulty_value_for_pattern(
         self,
@@ -610,42 +503,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return wave_pattern, demons_x, demons_y, demons_dir
 
-    def _demon_h_to_x(self, hpos: chex.Array) -> chex.Array:
-        return _demon_hpos_to_x(
-            hpos,
-            self.consts.DEMON_SPAWN_LEFT_H_POSITION,
-            self.consts.DEMON_MIN_X - self.consts.DEMON_SIZE[1],
-            self.consts.DEMON_RIGHT_BOUND_H_POSITION,
-            self.consts.DEMON_MAX_X,
-        )
-
-    def _demon_x_to_h(self, x: chex.Array) -> chex.Array:
-        return _demon_x_to_hpos(
-            x,
-            self.consts.DEMON_SPAWN_LEFT_H_POSITION,
-            self.consts.DEMON_MIN_X - self.consts.DEMON_SIZE[1],
-        )
-
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
         spacing = (self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X) // (self.consts.MAX_DEMONS + 1)
         return (self.consts.DEMON_MIN_X + (ids + 1) * spacing).astype(jnp.int32)
 
-    def _sync_demons_from_internal_positions(self, state: DemonAttackState) -> DemonAttackState:
-        ids = jnp.arange(self.consts.MAX_DEMONS)
-        demons_x_from_h = jnp.clip(
-            self._demon_h_to_x(state.demon_left_h_position),
-            self.consts.DEMON_MIN_X,
-            self.consts.DEMON_MAX_X,
-        )
-        demons_x = jnp.where(state.spawn_anim_timer > 0, self._spawn_target_x(ids), demons_x_from_h)
-        demons_y = jnp.clip(
-            jnp.array(self.consts.PLAYER_Y + self.consts.PLAYER_LASER_DEPTH, dtype=jnp.int32) - state.demon_v_position,
-            self.consts.DEMON_MIN_Y,
-            self.consts.DEMON_MAX_Y,
-        )
+    def _sync_demon_status(self, state: DemonAttackState) -> DemonAttackState:
         return state.replace(
-            demons_x=demons_x,
-            demons_y=demons_y,
             demons_alive=(state.demon_register & 192) != 0,
             wave_spawned=state.appeared_demons,
         )
@@ -671,7 +534,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_action_counter=jnp.array(0, dtype=jnp.int32),
         )
 
-        return self._sync_demons_from_internal_positions(state)
+        return self._sync_demon_status(state)
 
     def _advance_wave(self, state: DemonAttackState) -> DemonAttackState:
         next_wave_number = state.wave_number + 1
@@ -714,9 +577,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
             **self._initial_demon_values(),
-            bomb_x=jnp.array(0, dtype=jnp.int32),
-            bomb_y=jnp.array(0, dtype=jnp.int32),
-            bomb_active=jnp.array(False, dtype=jnp.bool_),
+            bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
             bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
             bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
@@ -737,7 +600,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             step_counter=jnp.array(0, dtype=jnp.int32),
             key=key,
         )
-        state = self._sync_demons_from_internal_positions(state)
+        state = self._sync_demon_status(state)
         return self._get_observation(state), state
 
     @partial(jax.jit, static_argnums=(0,))
@@ -872,13 +735,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(jnp.logical_and(burst_in_progress, source_ids)),
         )
 
-        target_v = self._new_demon_v_position(state, selected)
+        target_y = self._new_demon_y(state, selected)
         selected_mask = ids == selected
         selected_active = frame_mod4 != 0
-        demon_v_position = jnp.where(
+        demons_y = jnp.where(
             selected_active & selected_mask,
-            state.demon_v_position + jnp.where(target_v >= state.demon_v_position[selected], 1, -1),
-            state.demon_v_position,
+            state.demons_y + jnp.where(target_y >= state.demons_y[selected], 1, -1),
+            state.demons_y,
         )
         demon_register = jnp.where(
             selected_active & selected_mask & ((state.demon_random & 7) == 0),
@@ -905,86 +768,88 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
         schedule_mask = ids == scheduled
-        demon_v_position = jnp.where(
+        demons_y = jnp.where(
             schedule & schedule_mask,
-            self._new_demon_v_position(state.replace(demon_v_position=demon_v_position), scheduled),
-            demon_v_position,
+            self._new_demon_y(state.replace(demons_y=demons_y), scheduled),
+            demons_y,
         )
         demon_register = jnp.where(start_spawn & tele_mask, demon_register | 64, demon_register)
         demon_register = jnp.where(finish_spawn & tele_mask, self.consts.DEMON_NORMAL_REGISTER, demon_register)
 
         spawn_target_x = self._spawn_target_x(ids)
-        spawn_target_h = self._demon_x_to_h(spawn_target_x)
-        demon_left_h_position = jnp.where(
-            start_spawn & tele_mask,
-            self.consts.DEMON_SPAWN_LEFT_H_POSITION,
-            jnp.where(finish_spawn & tele_mask, spawn_target_h, state.demon_left_h_position),
+        demons_x = jnp.where(
+            (start_spawn | finish_spawn) & tele_mask,
+            spawn_target_x,
+            state.demons_x,
         )
-        demon_right_h_position = jnp.where(
-            start_spawn & tele_mask,
-            self.consts.DEMON_SPAWN_RIGHT_H_POSITION,
-            jnp.where(
-                finish_spawn & tele_mask,
-                self._sub_demon_h_n(spawn_target_h, self.consts.DEMON_RIGHT_SIDE_OFFSET),
-                state.demon_right_h_position,
-            ),
-        )
-
-        spawning = (demon_register & 192) == self.consts.DEMON_SPAWN_REGISTER
-        demon_left_h_position = jnp.where(spawning, _sub_demon_hpos(demon_left_h_position), demon_left_h_position)
-        demon_right_h_position = jnp.where(spawning, _add_demon_hpos(demon_right_h_position), demon_right_h_position)
 
         normal = ((demon_register & 192) == 128) & (state.spawn_pause_timer <= 0)
         phase = demon_register & 7
-        v_sum = state.demon_v_parameters + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[phase]
-        h_sum = state.demon_left_h_parameters + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[phase]
-        v_step = normal & (v_sum > 255)
-        h_step = normal & (h_sum > 255)
+        y_motion_sum = (
+            state.demon_y_motion_accumulator
+            + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[phase]
+        )
+        x_motion_sum = (
+            state.demon_x_motion_accumulator
+            + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[phase]
+        )
+        move_y = normal & (y_motion_sum > 255)
+        move_x = normal & (x_motion_sum > 255)
 
-        demon_v_position = jnp.where(
-            v_step,
-            demon_v_position + jnp.where((demon_register & 8) != 0, 1, -1),
-            demon_v_position,
+        moving_down = (demon_register & 8) == 0
+        demons_y = jnp.where(
+            move_y,
+            demons_y + jnp.where(moving_down, 1, -1),
+            demons_y,
         )
-        previous_left_h_position = demon_left_h_position
-        demon_left_h_position = jnp.where(
-            h_step & ((demon_register & 16) != 0),
-            _sub_demon_hpos(demon_left_h_position),
-            jnp.where(h_step, _add_demon_hpos(demon_left_h_position), demon_left_h_position),
+
+        moving_right = (demon_register & 16) != 0
+        previous_x = demons_x
+        demons_x = jnp.where(
+            move_x,
+            demons_x + jnp.where(moving_right, 1, -1),
+            demons_x,
         )
-        moved_x = self._demon_h_to_x(demon_left_h_position)
-        outside_x = (moved_x < self.consts.DEMON_MIN_X) | (moved_x > self.consts.DEMON_MAX_X)
+        outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
         turn = normal & (
-            (((demon_register & 16) != 0) & (moved_x >= self.consts.DEMON_MAX_X))
-            | (((demon_register & 16) == 0) & (moved_x <= self.consts.DEMON_MIN_X))
+            (moving_right & (demons_x >= self.consts.DEMON_MAX_X))
+            | (~moving_right & (demons_x <= self.consts.DEMON_MIN_X))
         )
-        demon_left_h_position = jnp.where(turn & outside_x, previous_left_h_position, demon_left_h_position)
+        demons_x = jnp.where(turn & outside_x, previous_x, demons_x)
         demon_register = jnp.where(
             turn,
             ((demon_register ^ 16) & 240) | 1,
             demon_register,
         )
-        demon_right_h_position = jnp.where(
-            normal,
-            self._sub_demon_h_n(demon_left_h_position, self.consts.DEMON_RIGHT_SIDE_OFFSET),
-            demon_right_h_position,
-        )
 
-        top = jnp.clip(demon_v_position[0], self.consts.DEMON_V_MIN, self.consts.DEMON_V_MAX)
-        middle = jnp.minimum(demon_v_position[1], top - self.consts.DEMON_V_MIN_DISTANCE)
-        bottom = jnp.minimum(demon_v_position[2], middle - self.consts.DEMON_V_MIN_DISTANCE)
-        demon_v_position = jnp.stack((
+        top = jnp.clip(demons_y[0], self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
+        middle = jnp.maximum(
+            demons_y[1],
+            top + self.consts.DEMON_MIN_VERTICAL_DISTANCE,
+        )
+        bottom = jnp.maximum(
+            demons_y[2],
+            middle + self.consts.DEMON_MIN_VERTICAL_DISTANCE,
+        )
+        demons_y = jnp.clip(jnp.stack((
             top,
             middle,
-            jnp.maximum(bottom, self._new_demon_v_shift(state.wave_number)),
-        )).astype(jnp.int32)
+            bottom,
+        )), self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y).astype(jnp.int32)
 
         state = state.replace(
-            demon_left_h_parameters=jnp.where(normal, h_sum & 255, state.demon_left_h_parameters),
-            demon_left_h_position=demon_left_h_position,
-            demon_right_h_position=demon_right_h_position,
-            demon_v_position=demon_v_position,
-            demon_v_parameters=jnp.where(normal, v_sum & 255, state.demon_v_parameters),
+            demons_x=demons_x,
+            demons_y=demons_y,
+            demon_x_motion_accumulator=jnp.where(
+                normal,
+                x_motion_sum & 255,
+                state.demon_x_motion_accumulator,
+            ),
+            demon_y_motion_accumulator=jnp.where(
+                normal,
+                y_motion_sum & 255,
+                state.demon_y_motion_accumulator,
+            ),
             demon_register=demon_register,
             demon_teleport=demon_teleport,
             demon_teleport_timer=jnp.where(
@@ -1008,7 +873,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.spawn_pause_timer,
             ),
         )
-        return self._sync_demons_from_internal_positions(state)
+        return self._sync_demon_status(state)
 
     def _bomb_step(self, state: DemonAttackState) -> DemonAttackState:
         """Advance enemy bomb movement and burst-firing state by one frame.
