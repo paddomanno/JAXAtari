@@ -1233,7 +1233,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demons_alive,
                 jnp.logical_not(demons_alive),
             )
-        )
+        ) # boolean if at least one demon was killed
 
         spawn_timer = jnp.where(
             demon_killed,
@@ -1241,7 +1241,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.maximum(state.spawn_timer - 1, 0),
         )
 
-        killed = state.demons_alive & ~demons_alive
+        killed = state.demons_alive & ~demons_alive # which demon was killed
 
         # Bomb vs Player
         player_hit = jnp.logical_and(
