@@ -256,6 +256,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=(2, 2, 2, 2, 3, 3),
     )
     # Coordinates & Sizes. Sizes are (height, width).
+    PLAYER_START_X: int = struct.field(pytree_node=False, default=76)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
@@ -539,7 +540,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         wave_values = self._build_wave_start_values(wave_number)
 
         state = DemonAttackState(
-            player_x=jnp.array(76, dtype=jnp.int32),
+            player_x=jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
             laser_x=jnp.array(0, dtype=jnp.int32),
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
@@ -585,8 +586,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_timer = s.explosion_timer - 1
             exploding = new_timer > 0
             # If timer reaches 0, player hit logic should have already reduced lives.
-            # We just need to stop exploding.
-            return s.replace(explosion_timer=new_timer, player_exploding=exploding)
+            # We just need to stop exploding and teleport the player back to his original x coordinate
+            player_x = jnp.where(
+                exploding,
+                s.player_x,
+                jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
+            )
+            return s.replace(
+                player_x=player_x,
+                explosion_timer=new_timer,
+                player_exploding=exploding,
+            )
 
         def normal_step(s, act):
             # 0. Spawn Animation Step
