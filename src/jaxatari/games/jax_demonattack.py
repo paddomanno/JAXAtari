@@ -21,7 +21,7 @@ DIFFICULTY_TABLE_NAMES = (
     "WAVE_Y_TABLE",
     "WAVE_DIR_TABLE",
     "WAVE_DEMON_SPEED_TABLE",
-    "ENEMY_SHOT_SPEED_TABLE",
+    "WAVE_BOMB_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
 )
 FORMATION_TABLE_NAMES = ("WAVE_X_TABLE", "WAVE_Y_TABLE", "WAVE_DIR_TABLE")
@@ -781,7 +781,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # Advance existing bombs before adding the current frame's bomb
         bomb_speed = self._difficulty_value_for_pattern(
-            self.consts.ENEMY_SHOT_SPEED_TABLE,
+            self.consts.WAVE_BOMB_SPEED_TABLE,
             state.wave_pattern,
         )
         moved_y = state.bomb_y + jnp.where(state.bomb_active, bomb_speed, 0)
