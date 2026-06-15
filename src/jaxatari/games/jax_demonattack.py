@@ -1190,23 +1190,30 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         def check_demon_collision(i, carry):
             s_alive, s_score, l_active = carry
 
-            demon_hit = jnp.logical_and(
+            laser_right = state.laser_x + self.consts.LASER_SIZE[1]
+            laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
+            demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
+            demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
+
+            overlaps_horizontally = jnp.logical_and(
+                laser_right > state.demons_x[i],
+                state.laser_x < demon_right,
+            )
+            overlaps_vertically = jnp.logical_and(
+                state.laser_y < demon_bottom,
+                laser_bottom > state.demons_y[i],
+            )
+            rectangles_overlap = jnp.logical_and(
+                overlaps_horizontally,
+                overlaps_vertically,
+            )
+            demon_can_be_hit = jnp.logical_and(
                 s_alive[i],
-                jnp.logical_and(
-                    state.spawn_anim_timer[i] <= 0,
-                    jnp.logical_and(l_active,
-                        jnp.logical_and(
-                            state.laser_x + self.consts.LASER_SIZE[1] > state.demons_x[i],
-                            jnp.logical_and(
-                                state.laser_x < state.demons_x[i] + self.consts.DEMON_SIZE[1],
-                                jnp.logical_and(
-                                    state.laser_y < state.demons_y[i] + self.consts.DEMON_SIZE[0],
-                                    state.laser_y + self.consts.LASER_SIZE[1] > state.demons_y[i]
-                                )
-                            )
-                        )
-                    )
-                )
+                state.spawn_anim_timer[i] <= 0,
+            )
+            demon_hit = jnp.logical_and(
+                demon_can_be_hit,
+                jnp.logical_and(l_active, rectangles_overlap),
             )
 
             new_alive = s_alive.at[i].set(
