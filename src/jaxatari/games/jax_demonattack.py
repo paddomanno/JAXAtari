@@ -434,17 +434,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         carry = ((shifted ^ random) // 64) & 1
         return (shifted | carry).astype(jnp.int32)
 
-    def _new_demon_y(self, state: DemonAttackState, demon: chex.Array) -> chex.Array:
+    def _new_demon_y(self, demons_y: chex.Array, demon: chex.Array) -> chex.Array:
         """Choose a vertically spaced target row for a respawning demon slot."""
         def first():
-            return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + state.demons_y[1]) // 2
+            return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + demons_y[1]) // 2
 
         def second():
-            return (state.demons_y[0] + state.demons_y[2]) // 2
+            return (demons_y[0] + demons_y[2]) // 2
 
         def third():
             return (
-                state.demons_y[1]
+                demons_y[1]
                 + jnp.array(self.consts.DEMON_MAX_Y, dtype=jnp.int32)
             ) // 2
 
@@ -709,7 +709,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # One slot per frame is nudged toward its spacing target. The random
         # direction flip keeps horizontal motion from becoming fully periodic.
-        target_y = self._new_demon_y(state, selected)
+        target_y = self._new_demon_y(state.demons_y, selected)
         selected_mask = ids == selected
         selected_active = frame_mod4 != 0
         demons_y = jnp.where(
@@ -748,7 +748,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         schedule_mask = ids == scheduled
         demons_y = jnp.where(
             schedule & schedule_mask,
-            self._new_demon_y(state.replace(demons_y=demons_y), scheduled),
+            self._new_demon_y(demons_y, scheduled),
             demons_y,
         )
         demon_register = jnp.where(start_spawn & tele_mask, demon_register | 64, demon_register)
