@@ -235,7 +235,6 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
     DEMON_NORMAL_REGISTER: int = struct.field(pytree_node=False, default=144)
-    DEMON_SPAWN_REGISTER: int = struct.field(pytree_node=False, default=64)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
