@@ -490,20 +490,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return values[index]
 
-    def _formation_for_wave(self, wave_number: chex.Array):
-        """Resolve the pattern and initial positions for a new wave."""
-        wave_pattern = self._resolve_wave_pattern(wave_number)
-        demons_x = self._difficulty_value_for_pattern(
-            self.consts.WAVE_X_TABLE, wave_pattern
-        )
-        demons_y = self._difficulty_value_for_pattern(
-            self.consts.WAVE_Y_TABLE, wave_pattern
-        )
-        demons_dir = self._difficulty_value_for_pattern(
-            self.consts.WAVE_DIR_TABLE, wave_pattern
-        )
-        return wave_pattern, demons_x, demons_y, demons_dir
-
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
         """Return evenly spaced spawn x positions for demon slot ids."""
         spacing = (self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X) // (self.consts.MAX_DEMONS + 1)
