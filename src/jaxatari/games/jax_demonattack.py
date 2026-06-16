@@ -698,6 +698,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
 
+        # Movement is globally paused while demons are not ready, and locally
+        # paused for the demon currently emitting a burst.
         can_move = self._demons_ready(state)
         burst_in_progress = state.bomb_burst_step < self.consts.BOMB_BURST_RATES
         source_ids = jnp.arange(self.consts.MAX_DEMONS, dtype=jnp.int32) == state.bomb_source_idx
@@ -706,6 +708,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(jnp.logical_and(burst_in_progress, source_ids)),
         )
 
+        # One slot per frame is nudged toward its spacing target. The random
+        # direction flip keeps horizontal motion from becoming fully periodic.
         target_y = self._new_demon_y(state, selected)
         selected_mask = ids == selected
         selected_active = frame_mod4 != 0
@@ -726,6 +730,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_register,
         )
 
+        # Teleport scheduling is the spawn state machine. A free slot is chosen,
+        # waits for a random delay, enters spawn animation, then becomes normal.
         timer = jnp.maximum(state.demon_teleport_timer - 1, 0)
         tele_mask = ids == state.demon_teleport
         tele_kind = demon_register[state.demon_teleport] & 192
@@ -737,6 +743,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(free[::-1].astype(jnp.int32))
         schedule = can_schedule & jnp.any(free)
 
+        # New demons start from the target row for their slot so the formation
+        # stays vertically separated as the wave refills.
         demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
         schedule_mask = ids == scheduled
         demons_y = jnp.where(
@@ -754,6 +762,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_x,
         )
 
+        # Motion tables are fractional speeds. Accumulators overflow past 255
+        # to produce a one-pixel step on that axis.
         normal = (
             can_move
             & ((demon_register & 192) == 128)
@@ -778,6 +788,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_y,
         )
 
+        # Horizontal boundary hits flip the direction bit. If the step overshot
+        # the legal area, restore the previous x before continuing.
         moving_right = (demon_register & 16) != 0
         previous_x = demons_x
         demons_x = jnp.where(
@@ -797,6 +809,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_register,
         )
 
+        # Keep the three slots ordered top-to-bottom with a minimum gap. This
+        # prevents the target nudges from collapsing demon rows.
         top = jnp.clip(demons_y[0], self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
         middle = jnp.maximum(
             demons_y[1],
@@ -812,6 +826,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bottom,
         )), self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y).astype(jnp.int32)
 
+        # Store the state, then derive the public alive mask and wave-spawned count.
         state = state.replace(
             demons_x=demons_x,
             demons_y=demons_y,
