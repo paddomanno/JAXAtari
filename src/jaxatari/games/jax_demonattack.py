@@ -1028,6 +1028,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
         # Laser vs Demons
         def check_demon_collision(i, carry):
+            """
+            The carry contains the current alive mask, score, and laser-active
+            flag. A demon can only be hit after its spawn animation has ended,
+            and a successful hit clears that demon, adds score, and consumes the
+            laser so later demon slots in this loop cannot also be hit.
+            """
             s_alive, s_score, l_active = carry
 
             laser_right = state.laser_x + self.consts.LASER_SIZE[1]
