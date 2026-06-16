@@ -17,14 +17,9 @@ INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
 PATTERNS_PER_DIFFICULTY_ENTRY = 2
 DIFFICULTY_TABLE_NAMES = (
-    "WAVE_X_TABLE",
-    "WAVE_Y_TABLE",
-    "WAVE_DIR_TABLE",
-    "WAVE_DEMON_SPEED_TABLE",
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
 )
-FORMATION_TABLE_NAMES = ("WAVE_X_TABLE", "WAVE_Y_TABLE", "WAVE_DIR_TABLE")
 
 def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
     digits = np.zeros((10, 8, 8, 4), dtype=np.uint8)
@@ -213,14 +208,11 @@ class DemonAttackConstants(struct.PyTreeNode):
     HEIGHT: int = struct.field(pytree_node=False, default=210)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
-    DEMON_SPEED: int = struct.field(pytree_node=False, default=1)
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
-    MAX_LIVING_DEMONS: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
     SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
-    SPAWN_ANIM_X_OFFSET: int = struct.field(pytree_node=False, default=7)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
     DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=32)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
@@ -248,27 +240,11 @@ class DemonAttackConstants(struct.PyTreeNode):
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
-    WAVE_X_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=((42, 76, 110), (42, 110, 76), (30, 76, 122),
-                 (24, 76, 128), (24, 68, 124), (20, 76, 132))
-    )
-    WAVE_Y_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=((42, 42, 42), (38, 38, 38), (34, 46, 34),
-                 (32, 42, 52), (30, 40, 58), (28, 44, 64))
-    )
-    WAVE_DIR_TABLE: Tuple[Tuple[int, int, int], ...] = struct.field(
-        pytree_node=False,
-        default=((1, -1, 1), (1, -1, 1), (1, -1, 1),
-                 (1, -1, 1), (1, 1, -1), (1, -1, 1))
-    )
     WAVE_DEMON_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
-    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
