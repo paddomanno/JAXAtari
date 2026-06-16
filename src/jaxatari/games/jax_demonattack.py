@@ -16,6 +16,9 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
 PATTERNS_PER_DIFFICULTY_ENTRY = 2
+DEMON_STATUS_FREE = 0
+DEMON_STATUS_SPAWNING = 1
+DEMON_STATUS_NORMAL = 2
 DIFFICULTY_TABLE_NAMES = (
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
@@ -223,7 +226,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(255, 192, 160, 128, 128, 160, 192, 255),
     )
-    DEMON_INITIAL_REGISTER: Tuple[int, int, int] = struct.field(
+    DEMON_INITIAL_PHASE: Tuple[int, int, int] = struct.field(
         pytree_node=False,
         default=(1, 0, 0),
     )
@@ -234,7 +237,6 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_INITIAL_RANDOM: int = struct.field(pytree_node=False, default=234)
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
-    DEMON_NORMAL_REGISTER: int = struct.field(pytree_node=False, default=144)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
@@ -309,7 +311,10 @@ class DemonAttackState(struct.PyTreeNode):
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
     demon_x_motion_accumulator: chex.Array  # 8-bit fractional horizontal motion carry per slot
     demon_y_motion_accumulator: chex.Array  # 8-bit fractional vertical motion carry per slot
-    demon_register: chex.Array  # Per-slot ROM-style status, direction, and phase bits
+    demon_status: chex.Array  # Per-slot status: free, spawning, or normal
+    demon_phase: chex.Array  # Per-slot movement phase, 0..7
+    demon_moving_right: chex.Array  # Per-slot horizontal direction
+    demon_moving_down: chex.Array  # Per-slot vertical direction
     demon_teleport: chex.Array  # Slot currently scheduled for spawn or spawn completion
     demon_teleport_timer: chex.Array  # Countdown controlling delayed appearance
     appeared_demons: chex.Array  # Total demons that have entered the current wave
@@ -421,7 +426,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_x_motion_accumulator=zeros,
             demon_y_motion_accumulator=zeros,
-            demon_register=jnp.asarray(self.consts.DEMON_INITIAL_REGISTER, dtype=jnp.int32),
+            demon_status=jnp.full((self.consts.MAX_DEMONS,), DEMON_STATUS_FREE, dtype=jnp.int32),
+            demon_phase=jnp.asarray(self.consts.DEMON_INITIAL_PHASE, dtype=jnp.int32),
+            demon_moving_right=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_moving_down=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_teleport=jnp.array(self.consts.DEMON_INITIAL_TELEPORT, dtype=jnp.int32),
             demon_teleport_timer=jnp.array(self.consts.DEMON_INITIAL_TELEPORT_TIMER, dtype=jnp.int32),
             appeared_demons=jnp.array(0, dtype=jnp.int32),
@@ -473,7 +481,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _sync_demon_status(self, state: DemonAttackState) -> DemonAttackState:
         """Derive public liveness and wave counters from demon fields."""
         return state.replace(
-            demons_alive=(state.demon_register & 192) != 0,
+            demons_alive=state.demon_status != DEMON_STATUS_FREE,
             wave_spawned=state.appeared_demons,
         )
 
@@ -687,7 +695,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
-        """Advance demon spawn scheduling, register phases, and movement.
+        """Advance demon spawn scheduling, movement phases, and movement.
 
         A single selected slot is nudged toward its vertical spacing target each frame,
         free slots are scheduled through ``demon_teleport_timer``, and normal
@@ -701,7 +709,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # paused for the demon currently emitting a burst.
         can_move = self._demons_ready(state)
         burst_in_progress = state.bomb_burst_step < self.consts.BOMB_BURST_RATES
-        source_ids = jnp.arange(self.consts.MAX_DEMONS, dtype=jnp.int32) == state.bomb_source_idx
+        source_ids = ids == state.bomb_source_idx
         can_move = jnp.logical_and(
             can_move,
             jnp.logical_not(jnp.logical_and(burst_in_progress, source_ids)),
@@ -717,28 +725,49 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_y + jnp.where(target_y >= state.demons_y[selected], 1, -1),
             state.demons_y,
         )
-        demon_register = jnp.where(
+        demon_moving_right = jnp.where(
             selected_active & selected_mask & ((state.demon_random & 7) == 0),
-            state.demon_register ^ 16,
-            state.demon_register,
+            jnp.logical_not(state.demon_moving_right),
+            state.demon_moving_right,
         )
         phase_mask = ids == frame_mod4
-        demon_register = jnp.where(
+        next_phase = (state.demon_phase + 1) & 7
+        next_moving_down = jnp.where(
+            state.demon_phase == 7,
+            jnp.logical_not(state.demon_moving_down),
+            state.demon_moving_down,
+        )
+        demon_phase = jnp.where(
             phase_mask,
-            (demon_register & 240) | ((demon_register + 1) & 15),
-            demon_register,
+            next_phase,
+            state.demon_phase,
+        )
+        demon_moving_down = jnp.where(
+            phase_mask,
+            next_moving_down,
+            state.demon_moving_down,
         )
 
         # Teleport scheduling is the spawn state machine. A free slot is chosen,
         # waits for a random delay, enters spawn animation, then becomes normal.
         timer = jnp.maximum(state.demon_teleport_timer - 1, 0)
         tele_mask = ids == state.demon_teleport
-        tele_kind = demon_register[state.demon_teleport] & 192
+        tele_status = state.demon_status[state.demon_teleport]
         can_appear = state.appeared_demons < state.wave_total
-        start_spawn = (state.demon_teleport_timer > 0) & (timer == 0) & (tele_kind == 0) & can_appear
-        finish_spawn = (state.demon_teleport_timer > 0) & (timer == 0) & (tele_kind != 0)
+        start_spawn = (
+            (state.demon_teleport_timer > 0)
+            & (timer == 0)
+            & (tele_status == DEMON_STATUS_FREE)
+            & can_appear
+        )
+        finish_spawn = (
+            (state.demon_teleport_timer > 0)
+            & (timer == 0)
+            & (tele_status != DEMON_STATUS_FREE)
+        )
         can_schedule = (state.demon_teleport_timer == 0) & can_appear
-        free = (demon_register & 192) == 0
+        demon_status = state.demon_status
+        free = demon_status == DEMON_STATUS_FREE
         scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(free[::-1].astype(jnp.int32))
         schedule = can_schedule & jnp.any(free)
 
@@ -751,8 +780,19 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self._new_demon_y(demons_y, scheduled),
             demons_y,
         )
-        demon_register = jnp.where(start_spawn & tele_mask, demon_register | 64, demon_register)
-        demon_register = jnp.where(finish_spawn & tele_mask, self.consts.DEMON_NORMAL_REGISTER, demon_register)
+        demon_status = jnp.where(
+            start_spawn & tele_mask,
+            DEMON_STATUS_SPAWNING,
+            demon_status,
+        )
+        demon_status = jnp.where(
+            finish_spawn & tele_mask,
+            DEMON_STATUS_NORMAL,
+            demon_status,
+        )
+        demon_phase = jnp.where(finish_spawn & tele_mask, 0, demon_phase)
+        demon_moving_right = jnp.where(finish_spawn & tele_mask, True, demon_moving_right)
+        demon_moving_down = jnp.where(finish_spawn & tele_mask, True, demon_moving_down)
 
         spawn_target_x = self._spawn_target_x(ids)
         demons_x = jnp.where(
@@ -765,48 +805,43 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # to produce a one-pixel step on that axis.
         normal = (
             can_move
-            & ((demon_register & 192) == 128)
+            & (demon_status == DEMON_STATUS_NORMAL)
             & (state.spawn_pause_timer <= 0)
         )
-        phase = demon_register & 7
         y_motion_sum = (
             state.demon_y_motion_accumulator
-            + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[phase]
+            + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
         x_motion_sum = (
             state.demon_x_motion_accumulator
-            + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[phase]
+            + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
         move_y = normal & (y_motion_sum > 255)
         move_x = normal & (x_motion_sum > 255)
 
-        moving_down = (demon_register & 8) == 0
         demons_y = jnp.where(
             move_y,
-            demons_y + jnp.where(moving_down, 1, -1),
+            demons_y + jnp.where(demon_moving_down, 1, -1),
             demons_y,
         )
 
-        # Horizontal boundary hits flip the direction bit. If the step overshot
+        # Horizontal boundary hits flip the direction. If the step overshot
         # the legal area, restore the previous x before continuing.
-        moving_right = (demon_register & 16) != 0
         previous_x = demons_x
         demons_x = jnp.where(
             move_x,
-            demons_x + jnp.where(moving_right, 1, -1),
+            demons_x + jnp.where(demon_moving_right, 1, -1),
             demons_x,
         )
         outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
         turn = normal & (
-            (moving_right & (demons_x >= self.consts.DEMON_MAX_X))
-            | (~moving_right & (demons_x <= self.consts.DEMON_MIN_X))
+            (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
+            | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
         )
         demons_x = jnp.where(turn & outside_x, previous_x, demons_x)
-        demon_register = jnp.where(
-            turn,
-            ((demon_register ^ 16) & 240) | 1,
-            demon_register,
-        )
+        demon_moving_right = jnp.where(turn, jnp.logical_not(demon_moving_right), demon_moving_right)
+        demon_moving_down = jnp.where(turn, True, demon_moving_down)
+        demon_phase = jnp.where(turn, 1, demon_phase)
 
         # Keep the three slots ordered top-to-bottom with a minimum gap. This
         # prevents the target nudges from collapsing demon rows.
@@ -839,7 +874,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 y_motion_sum & 255,
                 state.demon_y_motion_accumulator,
             ),
-            demon_register=demon_register,
+            demon_status=demon_status,
+            demon_phase=demon_phase,
+            demon_moving_right=demon_moving_right,
+            demon_moving_down=demon_moving_down,
             demon_teleport=demon_teleport,
             demon_teleport_timer=jnp.where(
                 start_spawn,
@@ -1149,7 +1187,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         state = state.replace(
             demons_alive=demons_alive,
-            demon_register=jnp.where(killed, 0, state.demon_register),
+            demon_status=jnp.where(killed, DEMON_STATUS_FREE, state.demon_status),
+            demon_phase=jnp.where(killed, 0, state.demon_phase),
+            demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
+            demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
             demon_teleport=jnp.where(demon_killed, jnp.argmax(killed.astype(jnp.int32)), state.demon_teleport),
             demon_teleport_timer=jnp.where(demon_killed, 0, state.demon_teleport_timer),
             score=score,
