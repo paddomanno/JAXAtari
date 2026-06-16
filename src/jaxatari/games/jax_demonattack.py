@@ -472,14 +472,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return (self.consts.DEMON_MIN_X + (ids + 1) * spacing).astype(jnp.int32)
 
     def _sync_demon_status(self, state: DemonAttackState) -> DemonAttackState:
-        """Derive public liveness and wave counters from ROM-style demon fields."""
+        """Derive public liveness and wave counters from demon fields."""
         return state.replace(
             demons_alive=(state.demon_register & 192) != 0,
             wave_spawned=state.appeared_demons,
         )
 
     def _initialize_wave_state(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
-        """Replace the previous wave state with a freshly initialized ROM-style wave."""
+        """Replace the previous wave state with a new initialized wave."""
         state = state.replace(
             wave_number=wave_number,
             wave_pattern=self._resolve_wave_pattern(wave_number),
