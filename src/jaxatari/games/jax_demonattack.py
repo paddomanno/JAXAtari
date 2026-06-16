@@ -332,13 +332,13 @@ class DemonAttackState(struct.PyTreeNode):
     demons_x: chex.Array
     demons_y: chex.Array  # Shape: (MAX_DEMONS,)
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
-    demon_x_motion_accumulator: chex.Array
-    demon_y_motion_accumulator: chex.Array
-    demon_register: chex.Array
-    demon_teleport: chex.Array
-    demon_teleport_timer: chex.Array
-    appeared_demons: chex.Array
-    demon_random: chex.Array
+    demon_x_motion_accumulator: chex.Array  # 8-bit fractional horizontal motion carry per slot
+    demon_y_motion_accumulator: chex.Array  # 8-bit fractional vertical motion carry per slot
+    demon_register: chex.Array  # Per-slot ROM-style status, direction, and phase bits
+    demon_teleport: chex.Array  # Slot currently scheduled for spawn or spawn completion
+    demon_teleport_timer: chex.Array  # Countdown controlling delayed appearance
+    appeared_demons: chex.Array  # Total demons that have entered the current wave
+    demon_random: chex.Array  # Deterministic 8-bit generator used by movement and spawn timing
 
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -415,9 +415,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 f"ENEMY_SHOT_ACTION_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
             )
 
-    def _wave_level_mod12(self, wave_number: chex.Array) -> chex.Array:
-        return jnp.where(wave_number < 12, wave_number, 8 + jnp.mod(wave_number, 4)).astype(jnp.int32)
-
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
         wave_number = jnp.maximum(wave_number, 0)
@@ -432,6 +429,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _wave_level_mod12(self, wave_number: chex.Array) -> chex.Array:
+        """Return the current wave pattern as a JAX int32 scalar."""
         return self._resolve_wave_pattern(wave_number).astype(jnp.int32)
 
     @staticmethod
@@ -440,6 +438,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return wave_pattern // PATTERNS_PER_DIFFICULTY_ENTRY
 
     def _initial_demon_values(self):
+        """Build initial per-demon movement and spawn fields."""
         zeros = jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32)
         return dict(
             demons_x=zeros,
@@ -455,11 +454,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _next_demon_random(self, random: chex.Array) -> chex.Array:
+        """Advance the deterministic 8-bit demon movement pseudo-random value."""
         shifted = (random * 2) & 255
         carry = ((shifted ^ random) // 64) & 1
         return (shifted | carry).astype(jnp.int32)
 
     def _new_demon_y(self, state: DemonAttackState, demon: chex.Array) -> chex.Array:
+        """Choose a vertically spaced target row for a respawning demon slot."""
         def first():
             return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + state.demons_y[1]) // 2
 
@@ -504,10 +505,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return wave_pattern, demons_x, demons_y, demons_dir
 
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
+        """Return evenly spaced spawn x positions for demon slot ids."""
         spacing = (self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X) // (self.consts.MAX_DEMONS + 1)
         return (self.consts.DEMON_MIN_X + (ids + 1) * spacing).astype(jnp.int32)
 
     def _sync_demon_status(self, state: DemonAttackState) -> DemonAttackState:
+        """Derive public liveness and wave counters from ROM-style demon fields."""
         return state.replace(
             demons_alive=(state.demon_register & 192) != 0,
             wave_spawned=state.appeared_demons,
@@ -723,6 +726,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(laser_x=laser_x, laser_y=laser_y, laser_active=laser_active)
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
+        """Advance demon spawn scheduling, register phases, and movement.
+
+        A single selected slot is nudged toward its vertical spacing target each frame,
+        free slots are scheduled through ``demon_teleport_timer``, and normal
+        demons move when their 8-bit motion accumulators overflow.
+        """
         ids = jnp.arange(self.consts.MAX_DEMONS)
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
@@ -1172,6 +1181,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _refill_or_advance_wave(
         self, state: DemonAttackState
     ) -> DemonAttackState:
+        """Advance once every scheduled demon has appeared and been destroyed."""
         wave_finished = jnp.logical_and(
             state.wave_spawned >= state.wave_total,
             jnp.logical_not(jnp.any(state.demons_alive)),
