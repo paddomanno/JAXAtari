@@ -792,7 +792,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_x,
         )
 
-        normal = ((demon_register & 192) == 128) & (state.spawn_pause_timer <= 0)
+        normal = (
+            can_move
+            & ((demon_register & 192) == 128)
+            & (state.spawn_pause_timer <= 0)
+        )
         phase = demon_register & 7
         y_motion_sum = (
             state.demon_y_motion_accumulator
