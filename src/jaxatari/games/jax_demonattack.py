@@ -590,6 +590,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             # We just need to stop exploding.
             return s.replace(explosion_timer=new_timer, player_exploding=exploding)
 
+        def explosion_step(s):
+            s = update_explosion(s)
+            s = s.replace(demon_random=self._next_demon_random(s.demon_random))
+            s = self._update_spawn_timers(s)
+            return self._demons_step(s)
+
         def normal_step(s, act):
             s = s.replace(demon_random=self._next_demon_random(s.demon_random))
             # 0. Spawn Animation Step
@@ -611,7 +617,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             lambda s: s,
             lambda s: jax.lax.cond(
                 s.player_exploding,
-                update_explosion,
+                explosion_step,
                 lambda ss: normal_step(ss, atari_action),
                 operand=s,
             ),
@@ -1176,6 +1182,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.zeros_like(state.bomb_active),
             state.bomb_active,
         )
+        bomb_burst_step = jnp.where(
+            any_player_hit,
+            self.consts.BOMB_BURST_RATES,
+            state.bomb_burst_step,
+        )
+        bomb_burst_timer = jnp.where(
+            any_player_hit,
+            0,
+            state.bomb_burst_timer,
+        )
 
         # If player hit, start explosion
         player_exploding = jnp.logical_or(state.player_exploding, any_player_hit)
@@ -1197,6 +1213,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             laser_active=laser_active,
             lives=lives,
             bomb_active=bomb_active,
+            bomb_burst_step=bomb_burst_step,
+            bomb_burst_timer=bomb_burst_timer,
             player_exploding=player_exploding,
             explosion_timer=explosion_timer,
             spawn_timer=spawn_timer,
