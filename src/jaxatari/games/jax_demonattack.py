@@ -20,6 +20,10 @@ DEMON_STATUS_FREE = 0
 DEMON_STATUS_SPAWNING = 1
 DEMON_STATUS_NORMAL = 2
 DIFFICULTY_TABLE_NAMES = (
+    "WAVE_X_TABLE",
+    "WAVE_Y_TABLE",
+    "WAVE_DIR_TABLE",
+    "WAVE_DEMON_SPEED_TABLE",
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
 )
@@ -208,8 +212,8 @@ def _get_default_asset_config() -> tuple:
 class DemonAttackConstants(struct.PyTreeNode):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
-    HEIGHT: int = struct.field(pytree_node=False, default=210)
-    PLAYER_SPEED: int = struct.field(pytree_node=False, default=2)
+    HEIGHT: int = struct.field(pytree_node=False, default=192)
+    PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
@@ -246,7 +250,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
-    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
+    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
@@ -256,11 +260,12 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=(2, 2, 2, 2, 3, 3),
     )
     # Coordinates & Sizes. Sizes are (height, width).
+    PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
-    PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=2)
+    PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=1)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
     PLAYER_DEATH_FLASH_DURATION: int = struct.field(pytree_node=False, default=20)
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
@@ -283,16 +288,16 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
     INIT_BUNKERS: int = struct.field(pytree_node=False, default=3)
-    BUNKER_X: int = struct.field(pytree_node=False, default=16)
+    BUNKER_X: int = struct.field(pytree_node=False, default=17)
     BUNKER_Y: int = struct.field(pytree_node=False, default=188)
-    BUNKER_SPACING: int = struct.field(pytree_node=False, default=7)
+    BUNKER_SPACING: int = struct.field(pytree_node=False, default=8)
 
     # Boundaries
-    BOUNDARY = 16
-    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY - 7) # WIDTH - boundary - player's width
-    DEMON_MIN_X: int = struct.field(pytree_node=False, default=16)  # left boundary for demons
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=136) # right boundary for demons
+    BOUNDARY = 25
+    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY) # left boundary for player
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for player
+    DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for demons
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
@@ -474,6 +479,64 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return values[index]
 
+    def _formation_for_wave(self, wave_number: chex.Array):
+        """Resolve the pattern and initial positions for a new wave."""
+        wave_pattern = self._resolve_wave_pattern(wave_number)
+        demons_x = self._difficulty_value_for_pattern(
+            self.consts.WAVE_X_TABLE, wave_pattern
+        )
+        demons_y = self._difficulty_value_for_pattern(
+            self.consts.WAVE_Y_TABLE, wave_pattern
+        )
+        demons_dir = self._difficulty_value_for_pattern(
+            self.consts.WAVE_DIR_TABLE, wave_pattern
+        )
+        return wave_pattern, demons_x, demons_y, demons_dir
+
+    def _spawn_animation_duration(self) -> chex.Array:
+        """Return the complete spawn animation duration in frames."""
+        return jnp.array(
+            self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION,
+            dtype=jnp.int32,
+        )
+
+    def _build_wave_start_values(self, wave_number: chex.Array) -> dict:
+        """Build all wave fields needed by reset and wave transitions."""
+        wave_pattern, demons_x, demons_y, demons_dir = self._formation_for_wave(
+            wave_number
+        )
+
+        # Slot arrays always have MAX_DEMONS entries, but only the first active slot
+        # participates in movement/collisions until later refills activate more.
+        wave_total = jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32)
+        initial_alive_count = jnp.minimum(wave_total, jnp.array(1, dtype=jnp.int32))
+        slot_ids = jnp.arange(self.consts.MAX_DEMONS)
+        demons_alive = slot_ids < initial_alive_count
+
+        # If the wave has more demons queued, start the refill countdown now.
+        spawn_timer = jnp.where(
+            wave_total > initial_alive_count,
+            jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+        )
+
+        spawn_anim_total = self._spawn_animation_duration()
+
+        return {
+            "wave_number": wave_number,
+            "wave_pattern": wave_pattern,
+            "wave_total": wave_total,
+            "wave_spawned": initial_alive_count,
+            "spawn_timer": spawn_timer,
+            "spawn_anim_timer": jnp.where(demons_alive, spawn_anim_total, 0),
+            "spawn_pause_timer": jnp.where(demons_alive, self.consts.SPAWN_MOVE_PAUSE, 0),
+            "demons_x": demons_x,
+            "demons_y": demons_y,
+            "demons_dir": demons_dir,
+            "demons_y_dir": jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            "demons_alive": demons_alive,
+        }
+
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
         """Return evenly spaced spawn x positions for demon slot ids."""
         spacing = (self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X) // (self.consts.MAX_DEMONS + 1)
@@ -512,8 +575,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _advance_wave(self, state: DemonAttackState) -> DemonAttackState:
         next_wave_number = state.wave_number + 1
 
-        should_freeze = jnp.array(self.consts.FREEZE_AFTER_MAX_ROM_WAVES, dtype=jnp.bool_) & (
-            next_wave_number >= self.consts.MAX_ROM_WAVES
+        should_freeze = jnp.logical_and(
+            jnp.array(self.consts.FREEZE_AFTER_MAX_ROM_WAVES, dtype=jnp.bool_),
+            next_wave_number >= self.consts.MAX_ROM_WAVES,
         )
 
         return jax.lax.cond(
@@ -545,7 +609,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         wave_number = jnp.array(0, dtype=jnp.int32)
 
         state = DemonAttackState(
-            player_x=jnp.array(76, dtype=jnp.int32),
+            player_x=jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
             laser_x=jnp.array(0, dtype=jnp.int32),
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
@@ -768,15 +832,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         tele_status = state.demon_status[state.demon_teleport]
         can_appear = state.appeared_demons < state.wave_total
         start_spawn = (
-            (state.demon_teleport_timer > 0)
-            & (timer == 0)
-            & (tele_status == DEMON_STATUS_FREE)
-            & can_appear
+                (state.demon_teleport_timer > 0)
+                & (timer == 0)
+                & (tele_status == DEMON_STATUS_FREE)
+                & can_appear
         )
         finish_spawn = (
-            (state.demon_teleport_timer > 0)
-            & (timer == 0)
-            & (tele_status != DEMON_STATUS_FREE)
+                (state.demon_teleport_timer > 0)
+                & (timer == 0)
+                & (tele_status != DEMON_STATUS_FREE)
         )
         can_schedule = (state.demon_teleport_timer == 0) & can_appear
         demon_status = state.demon_status
@@ -817,17 +881,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # Motion tables are fractional speeds. Accumulators overflow past 255
         # to produce a one-pixel step on that axis.
         normal = (
-            can_move
-            & (demon_status == DEMON_STATUS_NORMAL)
-            & (state.spawn_pause_timer <= 0)
+                can_move
+                & (demon_status == DEMON_STATUS_NORMAL)
+                & (state.spawn_pause_timer <= 0)
         )
         y_motion_sum = (
-            state.demon_y_motion_accumulator
-            + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
+                state.demon_y_motion_accumulator
+                + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
         x_motion_sum = (
-            state.demon_x_motion_accumulator
-            + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
+                state.demon_x_motion_accumulator
+                + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
         move_y = normal & (y_motion_sum > 255)
         move_x = normal & (x_motion_sum > 255)
@@ -848,8 +912,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
         turn = normal & (
-            (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
-            | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
+                (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
+                | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
         )
         demons_x = jnp.where(turn & outside_x, previous_x, demons_x)
         demon_moving_right = jnp.where(turn, jnp.logical_not(demon_moving_right), demon_moving_right)
