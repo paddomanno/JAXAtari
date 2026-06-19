@@ -756,7 +756,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         # Teleport scheduling is the spawn state machine. A free slot is chosen,
-        # waits for a random delay, enters spawn animation, then becomes normal.
+        # waits for the configured respawn delay, enters spawn animation, then
+        # becomes normal.
         timer = jnp.maximum(state.demon_teleport_timer - 1, 0)
         tele_mask = ids == state.demon_teleport
         tele_status = state.demon_status[state.demon_teleport]
@@ -892,7 +893,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 jnp.where(
                     finish_spawn,
                     0,
-                    jnp.where(schedule, (state.demon_random & 31) | 1, timer),
+                    jnp.where(
+                        schedule,
+                        jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
+                        timer,
+                    ),
                 ),
             ),
             wave_spawned_demons=state.wave_spawned_demons + start_spawn.astype(jnp.int32),
