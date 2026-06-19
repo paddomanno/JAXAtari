@@ -924,13 +924,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         The method also advances the enemy firing scheduler. Once the wave's
         action delay has elapsed, no previous bombs remain active, and at least
-        one demon is ready, a random roll may begin a burst from a selected
-        demon. Each burst retains that source demon and activates the bomb slots
-        assigned to its current rate after the configured interval. The burst
-        source is released when all rates have been processed.
+        one demon is ready, a burst begins from a selected demon. Each burst
+        retains that source demon and activates the bomb slots assigned to its
+        current rate after the configured interval. The burst source is released
+        when all rates have been processed.
         """
-        key, drop_key, demon_idx_key, burst_length_key = jax.random.split(
-            state.key, 4
+        key, demon_idx_key, burst_length_key = jax.random.split(
+            state.key, 3
         )
         ready_demons = self._demons_ready(state)
 
@@ -993,19 +993,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # until the previous bombs have left the screen.
         burst_in_progress = state.bomb_burst_step < self.consts.BOMB_BURST_RATES
         post_fire_pause = state.bomb_burst_timer > 0
-        drop_roll = jax.random.bits(drop_key, (), dtype=jnp.uint8)
+        scheduler_idle = jnp.logical_and(
+            jnp.logical_not(burst_in_progress),
+            jnp.logical_and(
+                jnp.logical_not(post_fire_pause),
+                jnp.logical_not(any_bomb_active),
+            ),
+        )
+        action_due = action_counter >= action_limit
+        has_ready_demon = jnp.any(ready_demons)
         can_start_burst = jnp.logical_and(
-            jnp.logical_and(
-                jnp.logical_not(burst_in_progress),
-                jnp.logical_and(
-                    jnp.logical_not(post_fire_pause),
-                    jnp.logical_not(any_bomb_active),
-                ),
-            ),
-            jnp.logical_and(
-                action_counter >= action_limit,
-                jnp.logical_and(jnp.any(ready_demons), drop_roll >= 176),
-            ),
+            scheduler_idle,
+            jnp.logical_and(action_due, has_ready_demon),
         )
         source_idx = jnp.where(
             can_start_burst,
@@ -1068,12 +1067,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_y = jnp.where(should_activate_slot, fired_y, bomb_y)
         bomb_active = jnp.logical_or(bomb_active, should_activate_slot)
 
-        # After firing, wait N complete frames before allowing the next bomb shot
+        # After firing, wait N action-counter ticks before allowing the next bomb shot
         next_burst_step = jnp.where(fire_rate_now, burst_step + 1, burst_step)
         burst_done = next_burst_step >= self.consts.BOMB_BURST_RATES
+        post_burst_pause = self.consts.BOMB_POST_FIRE_PAUSE * action_limit
         next_fire_pause = jnp.where(
             burst_done,
-            self.consts.BOMB_POST_FIRE_PAUSE,
+            post_burst_pause,
             self.consts.BOMB_BURST_RATE_INTERVAL,
         )
         next_burst_timer = jnp.where(
