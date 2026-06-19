@@ -406,10 +406,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             + jnp.mod(wave_number - INITIAL_WAVE_PATTERNS, repeating_pattern_count),
         )
 
-    def _wave_level_mod12(self, wave_number: chex.Array) -> chex.Array:
-        """Return the current wave pattern as a JAX int32 scalar."""
-        return self._resolve_wave_pattern(wave_number).astype(jnp.int32)
-
     @staticmethod
     def _difficulty_index_for_pattern(wave_pattern: chex.Array) -> chex.Array:
         """Map two consecutive patterns to one shared difficulty-table entry."""
@@ -936,7 +932,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         action_limit = jnp.asarray(
             self.consts.ENEMY_SHOT_ACTION_TABLE,
             dtype=jnp.int32,
-        )[self._wave_level_mod12(state.wave_number)]
+        )[state.wave_pattern]
 
         action_counter = state.bomb_action_counter + 1
         any_bomb_active = jnp.any(state.bomb_active)
