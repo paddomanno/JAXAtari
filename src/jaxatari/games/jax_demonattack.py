@@ -335,7 +335,6 @@ class DemonAttackState(struct.PyTreeNode):
     explosion_timer: chex.Array
     wave_number: chex.Array # Actual attack wave: 0, 1, 2, ...
     wave_pattern: chex.Array # Level pattern: 0..11, then repeating 8..11.
-    wave_total: chex.Array
     spawn_anim_timer: chex.Array
     spawn_pause_timer: chex.Array
     game_frozen: chex.Array
@@ -488,7 +487,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         state = state.replace(
             wave_number=wave_number,
             wave_pattern=self._resolve_wave_pattern(wave_number),
-            wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
             **self._initial_demon_values(),
             spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
@@ -559,7 +557,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             explosion_timer=jnp.array(0, dtype=jnp.int32),
             wave_number=wave_number,
             wave_pattern=self._resolve_wave_pattern(wave_number),
-            wave_total=jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32),
             spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
@@ -761,7 +758,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         timer = jnp.maximum(state.demon_teleport_timer - 1, 0)
         tele_mask = ids == state.demon_teleport
         tele_status = state.demon_status[state.demon_teleport]
-        can_appear = state.wave_spawned_demons < state.wave_total
+        can_appear = state.wave_spawned_demons < self.consts.WAVE_TOTAL_DEMONS
         start_spawn = (
                 (state.demon_teleport_timer > 0)
                 & (timer == 0)
@@ -1236,7 +1233,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     ) -> DemonAttackState:
         """Advance once every scheduled demon has appeared and been destroyed."""
         wave_finished = jnp.logical_and(
-            state.wave_spawned_demons >= state.wave_total,
+            state.wave_spawned_demons >= self.consts.WAVE_TOTAL_DEMONS,
             jnp.logical_not(jnp.any(state.demons_alive)),
         )
 
