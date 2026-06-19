@@ -20,10 +20,6 @@ DEMON_STATUS_FREE = 0
 DEMON_STATUS_SPAWNING = 1
 DEMON_STATUS_NORMAL = 2
 DIFFICULTY_TABLE_NAMES = (
-    "WAVE_X_TABLE",
-    "WAVE_Y_TABLE",
-    "WAVE_DIR_TABLE",
-    "WAVE_DEMON_SPEED_TABLE",
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
 )
@@ -250,7 +246,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
 
-    WAVE_DEMON_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
+    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
@@ -478,64 +474,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             values.shape[0] - 1,
         )
         return values[index]
-
-    def _formation_for_wave(self, wave_number: chex.Array):
-        """Resolve the pattern and initial positions for a new wave."""
-        wave_pattern = self._resolve_wave_pattern(wave_number)
-        demons_x = self._difficulty_value_for_pattern(
-            self.consts.WAVE_X_TABLE, wave_pattern
-        )
-        demons_y = self._difficulty_value_for_pattern(
-            self.consts.WAVE_Y_TABLE, wave_pattern
-        )
-        demons_dir = self._difficulty_value_for_pattern(
-            self.consts.WAVE_DIR_TABLE, wave_pattern
-        )
-        return wave_pattern, demons_x, demons_y, demons_dir
-
-    def _spawn_animation_duration(self) -> chex.Array:
-        """Return the complete spawn animation duration in frames."""
-        return jnp.array(
-            self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION,
-            dtype=jnp.int32,
-        )
-
-    def _build_wave_start_values(self, wave_number: chex.Array) -> dict:
-        """Build all wave fields needed by reset and wave transitions."""
-        wave_pattern, demons_x, demons_y, demons_dir = self._formation_for_wave(
-            wave_number
-        )
-
-        # Slot arrays always have MAX_DEMONS entries, but only the first active slot
-        # participates in movement/collisions until later refills activate more.
-        wave_total = jnp.array(self.consts.WAVE_TOTAL_DEMONS, dtype=jnp.int32)
-        initial_alive_count = jnp.minimum(wave_total, jnp.array(1, dtype=jnp.int32))
-        slot_ids = jnp.arange(self.consts.MAX_DEMONS)
-        demons_alive = slot_ids < initial_alive_count
-
-        # If the wave has more demons queued, start the refill countdown now.
-        spawn_timer = jnp.where(
-            wave_total > initial_alive_count,
-            jnp.array(self.consts.RESPAWN_DELAY, dtype=jnp.int32),
-            jnp.array(0, dtype=jnp.int32),
-        )
-
-        spawn_anim_total = self._spawn_animation_duration()
-
-        return {
-            "wave_number": wave_number,
-            "wave_pattern": wave_pattern,
-            "wave_total": wave_total,
-            "wave_spawned": initial_alive_count,
-            "spawn_timer": spawn_timer,
-            "spawn_anim_timer": jnp.where(demons_alive, spawn_anim_total, 0),
-            "spawn_pause_timer": jnp.where(demons_alive, self.consts.SPAWN_MOVE_PAUSE, 0),
-            "demons_x": demons_x,
-            "demons_y": demons_y,
-            "demons_dir": demons_dir,
-            "demons_y_dir": jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.int32),
-            "demons_alive": demons_alive,
-        }
 
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
         """Return evenly spaced spawn x positions for demon slot ids."""
