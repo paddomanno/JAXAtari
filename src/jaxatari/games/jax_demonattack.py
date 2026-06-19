@@ -217,7 +217,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
-    DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=32)
+    DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=44)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(64, 128, 192, 240, 240, 192, 128, 64),
@@ -245,15 +245,14 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
-
-    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3))
+    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1.5, 1, 2, 2, 3, 3))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
     )
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(2, 2, 2, 2, 3, 3),
+        default=(1, 1, 2, 2, 3, 3),
     )
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
@@ -267,7 +266,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
-    BOMB_BURST_RATE_INTERVAL: int = struct.field(pytree_node=False, default=3)
+    BOMB_BURST_RATE_INTERVAL: int = struct.field(pytree_node=False, default=10)
     BOMB_POST_FIRE_PAUSE: int = struct.field(pytree_node=False, default=10)
     # Assign the seven bomb slots to four timed volleys: 2 + 2 + 2 + 1.
     BOMB_BURST_RATE_BY_SLOT: Tuple[int, ...] = struct.field(
