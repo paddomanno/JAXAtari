@@ -12,6 +12,7 @@ import jaxatari.spaces as spaces
 from jaxatari.environment import JaxEnvironment, JAXAtariAction as Action, ObjectObservation
 from jaxatari.renderers import JAXGameRenderer
 from jaxatari.rendering import jax_rendering_utils as render_utils
+from jaxatari.modification import AutoDerivedConstants
 
 INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
@@ -231,7 +232,7 @@ def _bomb_visible_repeat_window(state, consts, bomb_type):
     )
     return visible_repeats, repeat_offset
 
-class DemonAttackConstants(struct.PyTreeNode):
+class DemonAttackConstants(AutoDerivedConstants):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=192)
@@ -331,9 +332,9 @@ class DemonAttackConstants(struct.PyTreeNode):
     # Boundaries
     BOUNDARY = 25
     PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY) # left boundary for player
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for player
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for player, calculated in compute_derived
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=None) # right boundary for demons, calculated in compute_derived
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
     DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
 
@@ -341,6 +342,12 @@ class DemonAttackConstants(struct.PyTreeNode):
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+
+    def compute_derived(self):
+        return {
+            'PLAYER_MAX_X': self.WIDTH - self.BOUNDARY - self.PLAYER_SIZE[1],
+            'DEMON_MAX_X': self.WIDTH - self.BOUNDARY  - self.DEMON_SIZE[1],
+        }
 
 class DemonAttackState(struct.PyTreeNode):
     player_x: chex.Array
