@@ -251,7 +251,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
             BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG), # TODO needs correct values
+            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG),  # TODO needs correct values
     )
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
@@ -903,7 +903,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x,
         )
         outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
-        turn = normal & (
+        turn = can_move & (
                 (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
                 | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
         )
