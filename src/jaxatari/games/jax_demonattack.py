@@ -245,7 +245,7 @@ class DemonAttackConstants(struct.PyTreeNode):
         pytree_node=False,
         default=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     )
-    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1.5, 1.5, 2, 2, 3, 3)) # TODO needs adjustments
+    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1, 1, 2, 2, 3, 3)) # TODO needs adjustments
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
@@ -253,7 +253,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
-    )
+    ) # TODO needs adjustments
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -266,7 +266,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
-    BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=3)
+    BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=20)
     BOMB_BURST_LENGTH_OPTIONS: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(1, 3, 5, 7),
@@ -1038,7 +1038,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         burst_timer = jnp.where(
             can_start_burst,
-            self.consts.BOMB_PRE_FIRE_PAUSE * action_limit,
+            self.consts.BOMB_PRE_FIRE_PAUSE,
             state.bomb_burst_timer,
         )
         # Activate every slot assigned to this bomb shot in one vectorized operation.
