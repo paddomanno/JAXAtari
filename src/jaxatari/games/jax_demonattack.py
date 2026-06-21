@@ -266,8 +266,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
-    BOMB_BURST_RATE_INTERVAL: int = struct.field(pytree_node=False, default=10)
-    BOMB_POST_FIRE_PAUSE: int = struct.field(pytree_node=False, default=10)
+    BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=3)
     # Assign the seven bomb slots to four timed volleys: 2 + 2 + 2 + 1.
     BOMB_BURST_RATE_BY_SLOT: Tuple[int, ...] = struct.field(
         pytree_node=False,
@@ -326,7 +325,9 @@ class DemonAttackState(struct.PyTreeNode):
     bomb_active: chex.Array
     bomb_source_idx: chex.Array
     bomb_burst_step: chex.Array
+    bomb_burst_length: chex.Array
     bomb_burst_timer: chex.Array
+    bomb_pre_fire_timer: chex.Array
     bomb_action_counter: chex.Array
 
     score: chex.Array
@@ -492,7 +493,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
             bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
             bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
+            bomb_pre_fire_timer=jnp.array(0, dtype=jnp.int32),
             bomb_action_counter=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -514,7 +517,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
                 bomb_source_idx=jnp.array(0, dtype=jnp.int32),
                 bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+                bomb_burst_length=jnp.array(0, dtype=jnp.int32),
                 bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
+                bomb_pre_fire_timer=jnp.array(0, dtype=jnp.int32),
                 bomb_action_counter=jnp.array(0, dtype=jnp.int32),
                 laser_active=jnp.array(False, dtype=jnp.bool_),
                 game_frozen=jnp.array(True, dtype=jnp.bool_),
@@ -545,7 +550,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
             bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
             bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
+            bomb_pre_fire_timer=jnp.array(0, dtype=jnp.int32),
             bomb_action_counter=jnp.array(0, dtype=jnp.int32),
             score=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(self.consts.INIT_BUNKERS, dtype=jnp.int32),
@@ -701,14 +708,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # Movement is globally paused while demons are not ready, and locally
         # paused for the demon currently emitting a burst.
         can_move = self._demons_ready(state)
-        burst_in_progress = state.bomb_burst_step < self.consts.BOMB_BURST_RATES
-        post_fire_pause = state.bomb_burst_timer > 0
+        burst_in_progress = state.bomb_burst_step < state.bomb_burst_length
+        pre_fire_pause = state.bomb_pre_fire_timer > 0
         source_ids = ids == state.bomb_source_idx
         can_move = jnp.logical_and(
             can_move,
             jnp.logical_not(
                 jnp.logical_and(
-                    jnp.logical_or(burst_in_progress, post_fire_pause),
+                    jnp.logical_or(burst_in_progress, pre_fire_pause),
                     source_ids,
                 )
             ),
@@ -982,14 +989,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # A burst owns one demon until up to all four bomb rates have fired. New bursts wait
         # until the previous bombs have left the screen.
-        burst_in_progress = state.bomb_burst_step < self.consts.BOMB_BURST_RATES
-        post_fire_pause = state.bomb_burst_timer > 0
+        burst_in_progress = state.bomb_burst_step < state.bomb_burst_length
         scheduler_idle = jnp.logical_and(
             jnp.logical_not(burst_in_progress),
-            jnp.logical_and(
-                jnp.logical_not(post_fire_pause),
-                jnp.logical_not(any_bomb_active),
-            ),
+            jnp.logical_not(any_bomb_active),
         )
         action_due = action_counter >= action_limit
         has_ready_demon = jnp.any(ready_demons)
@@ -1012,20 +1015,38 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         burst_length = jax.random.randint(
             burst_length_key,
             (),
-            0,
-            self.consts.BOMB_BURST_RATES + 1,
+            1,
+            self.consts.MAX_BOMBS + 1,
             dtype=jnp.int32,
+        )
+        active_burst_length = jnp.where(
+            can_start_burst,
+            burst_length,
+            state.bomb_burst_length,
         )
         burst_step = jnp.where(
             can_start_burst,
-            self.consts.BOMB_BURST_RATES - burst_length,
+            0,
             state.bomb_burst_step,
         )
-        burst_timer = jnp.where(can_start_burst, 0, state.bomb_burst_timer)
-        burst_in_progress = burst_step < self.consts.BOMB_BURST_RATES
+        pre_fire_timer = jnp.where(
+            can_start_burst,
+            self.consts.BOMB_PRE_FIRE_PAUSE * action_limit,
+            state.bomb_pre_fire_timer,
+        )
+        burst_timer = jnp.where(
+            can_start_burst,
+            0,
+            state.bomb_burst_timer,
+        )
+        burst_in_progress = burst_step < active_burst_length
+        pre_fire_done = pre_fire_timer <= 0
         fire_rate_now = jnp.logical_and(
             burst_in_progress,
-            jnp.logical_and(source_ready, burst_timer <= 0),
+            jnp.logical_and(
+                pre_fire_done,
+                jnp.logical_and(source_ready, burst_timer <= 0),
+            ),
         )
 
         # Activate every slot assigned to this bomb shot in one vectorized operation.
@@ -1037,7 +1058,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.BOMB_BURST_RATE_BY_SLOT,
             dtype=jnp.int32,
         )
-        slots_in_rate = rate_by_slot == safe_burst_step
+        active_burst_slots = slot_ids < active_burst_length
+        slots_in_rate = jnp.logical_and(
+            rate_by_slot == safe_burst_step,
+            active_burst_slots,
+        )
 
         x_offsets = jnp.asarray(
             self.consts.BOMB_BURST_X_OFFSETS,
@@ -1058,18 +1083,23 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_y = jnp.where(should_activate_slot, fired_y, bomb_y)
         bomb_active = jnp.logical_or(bomb_active, should_activate_slot)
 
-        # After firing, wait N action-counter ticks before allowing the next bomb shot
+        # After firing, arm the delay before the next shot in the same burst.
         next_burst_step = jnp.where(fire_rate_now, burst_step + 1, burst_step)
-        burst_done = next_burst_step >= self.consts.BOMB_BURST_RATES
-        post_burst_pause = self.consts.BOMB_POST_FIRE_PAUSE * action_limit
-        next_fire_pause = jnp.where(
+        last_active_rate = rate_by_slot[jnp.maximum(active_burst_length - 1, 0)]
+        burst_done = next_burst_step > last_active_rate
+        next_burst_length = jnp.where(
             burst_done,
-            post_burst_pause,
-            self.consts.BOMB_BURST_RATE_INTERVAL,
+            jnp.array(0, dtype=jnp.int32),
+            active_burst_length,
+        )
+        next_pre_fire_timer = jnp.where(
+            can_start_burst,
+            pre_fire_timer,
+            jnp.maximum(pre_fire_timer - 1, 0),
         )
         next_burst_timer = jnp.where(
             fire_rate_now,
-            next_fire_pause,
+            jnp.where(burst_done, 0, action_limit),
             jnp.maximum(burst_timer - 1, 0),
         )
         source_idx = jnp.where(
@@ -1086,7 +1116,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_active=bomb_active,
             bomb_source_idx=source_idx,
             bomb_burst_step=next_burst_step,
+            bomb_burst_length=next_burst_length,
             bomb_burst_timer=next_burst_timer,
+            bomb_pre_fire_timer=next_pre_fire_timer,
             bomb_action_counter=action_counter,
         )
 
@@ -1189,10 +1221,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.BOMB_BURST_RATES,
             state.bomb_burst_step,
         )
+        bomb_burst_length = jnp.where(
+            any_player_hit,
+            0,
+            state.bomb_burst_length,
+        )
         bomb_burst_timer = jnp.where(
             any_player_hit,
             0,
             state.bomb_burst_timer,
+        )
+        bomb_pre_fire_timer = jnp.where(
+            any_player_hit,
+            0,
+            state.bomb_pre_fire_timer,
         )
 
         # If player hit, start explosion
@@ -1216,7 +1258,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             lives=lives,
             bomb_active=bomb_active,
             bomb_burst_step=bomb_burst_step,
+            bomb_burst_length=bomb_burst_length,
             bomb_burst_timer=bomb_burst_timer,
+            bomb_pre_fire_timer=bomb_pre_fire_timer,
             player_exploding=player_exploding,
             explosion_timer=explosion_timer,
             game_over=game_over,
