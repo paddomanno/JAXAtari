@@ -1102,8 +1102,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.where(burst_done, 0, action_limit),
             jnp.maximum(burst_timer - 1, 0),
         )
+        release_source = jnp.logical_and(
+            burst_done,
+            jnp.logical_not(jnp.any(bomb_active)),
+        )
         source_idx = jnp.where(
-            burst_done & (next_burst_timer <= 0),
+            release_source,
             jnp.array(0, dtype=jnp.int32),
             source_idx,
         )
