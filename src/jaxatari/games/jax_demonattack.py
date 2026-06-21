@@ -250,10 +250,10 @@ class DemonAttackConstants(struct.PyTreeNode):
     WAVE_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-                 BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-                 BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG), # TODO needs correct values
+            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
+            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG), # TODO needs correct values
     )
-    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(1.5, 1.5, 2, 2, 3, 3)) # TODO needs adjustments
+    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
@@ -261,7 +261,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
-    )
+    ) # TODO needs adjustments
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -274,7 +274,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
-    BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=3)
+    BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=20)
     BOMB_BURST_LENGTH_OPTIONS: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(1, 3, 5, 7),
@@ -723,8 +723,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
         return jnp.logical_and(
-            state.demons_alive,
-            jnp.logical_and(state.spawn_anim_timer <= 0, state.spawn_pause_timer <= 0),
+            state.demon_status == DEMON_STATUS_NORMAL,
+            state.spawn_pause_timer <= 0,
         )
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
@@ -877,11 +877,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # Motion tables are fractional speeds. Accumulators overflow past 255
         # to produce a one-pixel step on that axis.
-        normal = (
-                can_move
-                & (demon_status == DEMON_STATUS_NORMAL)
-                & (state.spawn_pause_timer <= 0)
-        )
         y_motion_sum = (
                 state.demon_y_motion_accumulator
                 + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
@@ -890,8 +885,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_x_motion_accumulator
                 + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
-        move_y = normal & (y_motion_sum > 255)
-        move_x = normal & (x_motion_sum > 255)
+        move_y = can_move & (y_motion_sum > 255)
+        move_x = can_move & (x_motion_sum > 255)
 
         demons_y = jnp.where(
             move_y,
@@ -939,12 +934,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=demons_x,
             demons_y=demons_y,
             demon_x_motion_accumulator=jnp.where(
-                normal,
+                can_move,
                 x_motion_sum & 255,
                 state.demon_x_motion_accumulator,
             ),
             demon_y_motion_accumulator=jnp.where(
-                normal,
+                can_move,
                 y_motion_sum & 255,
                 state.demon_y_motion_accumulator,
             ),
@@ -1105,7 +1100,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         burst_timer = jnp.where(
             can_start_burst,
-            self.consts.BOMB_PRE_FIRE_PAUSE * action_limit,
+            self.consts.BOMB_PRE_FIRE_PAUSE,
             state.bomb_burst_timer,
         )
         # Activate every slot assigned to this bomb shot in one vectorized operation.
