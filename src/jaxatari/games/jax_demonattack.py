@@ -1092,6 +1092,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
         # Laser vs Demons
+        laser_right = state.laser_x + self.consts.LASER_SIZE[1]
+        laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
+
         def check_demon_collision(i, carry):
             """
             The carry contains the current alive mask, score, and laser-active
@@ -1101,8 +1104,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             """
             s_alive, s_score, l_active = carry
 
-            laser_right = state.laser_x + self.consts.LASER_SIZE[1]
-            laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
+            demon_can_be_hit = jnp.logical_and(
+                l_active,
+                jnp.logical_and(s_alive[i], state.spawn_anim_timer[i] <= 0),
+            )
             demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
             demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
 
@@ -1118,13 +1123,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 overlaps_horizontally,
                 overlaps_vertically,
             )
-            demon_can_be_hit = jnp.logical_and(
-                s_alive[i],
-                state.spawn_anim_timer[i] <= 0,
-            )
             demon_hit = jnp.logical_and(
                 demon_can_be_hit,
-                jnp.logical_and(l_active, rectangles_overlap),
+                rectangles_overlap,
             )
 
             new_alive = s_alive.at[i].set(
