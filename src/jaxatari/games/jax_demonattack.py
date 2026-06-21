@@ -580,12 +580,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         def explosion_step(s):
             s = update_explosion(s)
-            s = s.replace(demon_random=self._next_demon_random(s.demon_random))
             s = self._update_spawn_timers(s)
             return self._demons_step(s)
 
         def normal_step(s, act):
-            s = s.replace(demon_random=self._next_demon_random(s.demon_random))
             # 0. Spawn Animation Step
             s = self._update_spawn_timers(s)
             # 1. Player Step
@@ -695,6 +693,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         free slots are scheduled through ``demon_teleport_timer``, and normal
         demons move when their 8-bit motion accumulators overflow.
         """
+        state = state.replace(demon_random=self._next_demon_random(state.demon_random))
         ids = jnp.arange(self.consts.MAX_DEMONS)
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
