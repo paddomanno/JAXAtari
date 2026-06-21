@@ -1131,10 +1131,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             """
             s_alive, s_score, l_active = carry
 
-            demon_can_be_hit = jnp.logical_and(
-                l_active,
-                jnp.logical_and(s_alive[i], state.spawn_anim_timer[i] <= 0),
-            )
             demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
             demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
 
@@ -1150,8 +1146,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 overlaps_horizontally,
                 overlaps_vertically,
             )
+            laser_can_hit_demon = jnp.logical_and(
+                l_active,
+                jnp.logical_and(s_alive[i], state.spawn_anim_timer[i] <= 0),
+            )
             demon_hit = jnp.logical_and(
-                demon_can_be_hit,
+                laser_can_hit_demon,
                 rectangles_overlap,
             )
 
