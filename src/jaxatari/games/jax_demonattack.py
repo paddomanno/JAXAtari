@@ -347,8 +347,8 @@ class DemonAttackConstants(AutoDerivedConstants):
 
     def compute_derived(self):
         return {
-            'PLAYER_MAX_X': self.WIDTH - self.BOUNDARY - self.PLAYER_SIZE[1],
-            'DEMON_MAX_X': self.WIDTH - self.BOUNDARY  - self.DEMON_SIZE[1],
+            'PLAYER_MAX_X': self.WIDTH - self.BOUNDARY,
+            'DEMON_MAX_X': self.WIDTH - self.BOUNDARY,
         }
 
 class DemonAttackState(struct.PyTreeNode):
