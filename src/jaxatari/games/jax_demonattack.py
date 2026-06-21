@@ -1221,9 +1221,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             game_over=game_over,
         )
 
-        return self._refill_or_advance_wave(state)
+        return self._advance_wave_if_complete(state)
 
-    def _refill_or_advance_wave(
+    def _advance_wave_if_complete(
         self, state: DemonAttackState
     ) -> DemonAttackState:
         """Advance once every scheduled demon has appeared and been destroyed."""
