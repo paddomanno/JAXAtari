@@ -658,8 +658,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
         return jnp.logical_and(
-            state.demons_alive,
-            jnp.logical_and(state.spawn_anim_timer <= 0, state.spawn_pause_timer <= 0),
+            state.demon_status == DEMON_STATUS_NORMAL,
+            state.spawn_pause_timer <= 0,
         )
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
@@ -812,11 +812,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # Motion tables are fractional speeds. Accumulators overflow past 255
         # to produce a one-pixel step on that axis.
-        normal = (
-                can_move
-                & (demon_status == DEMON_STATUS_NORMAL)
-                & (state.spawn_pause_timer <= 0)
-        )
         y_motion_sum = (
                 state.demon_y_motion_accumulator
                 + jnp.asarray(self.consts.DEMON_VERTICAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
@@ -825,8 +820,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_x_motion_accumulator
                 + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
-        move_y = normal & (y_motion_sum > 255)
-        move_x = normal & (x_motion_sum > 255)
+        move_y = can_move & (y_motion_sum > 255)
+        move_x = can_move & (x_motion_sum > 255)
 
         demons_y = jnp.where(
             move_y,
@@ -843,7 +838,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x,
         )
         outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
-        turn = normal & (
+        turn = can_move & (
                 (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
                 | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
         )
@@ -874,12 +869,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x=demons_x,
             demons_y=demons_y,
             demon_x_motion_accumulator=jnp.where(
-                normal,
+                can_move,
                 x_motion_sum & 255,
                 state.demon_x_motion_accumulator,
             ),
             demon_y_motion_accumulator=jnp.where(
-                normal,
+                can_move,
                 y_motion_sum & 255,
                 state.demon_y_motion_accumulator,
             ),
