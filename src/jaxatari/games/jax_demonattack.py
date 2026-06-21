@@ -592,7 +592,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             player_x = jnp.where(
                 exploding,
                 s.player_x,
-                jnp.array(self.consts.PLAYER_START_X, dtype=jnp.int32),
+                jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
             )
             return s.replace(
                 player_x=player_x,
