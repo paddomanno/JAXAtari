@@ -249,9 +249,9 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     WAVE_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
+        default=(BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
             BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG),  # TODO needs correct values
+            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG), # TODO needs correct values
     )
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
@@ -782,6 +782,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_burst_length > 0,
             state.bomb_burst_step <= last_active_rate,
         )
+        source_bomb_y = jnp.max(jnp.where(state.bomb_active, state.bomb_y, 0))
+        source_bomb_spawn_y = state.demons_y[state.bomb_source_idx] + self.consts.DEMON_SIZE[0]
+        long_burst_in_progress = jnp.logical_and(
+            self._uses_long_bombs(state.wave_pattern),
+            jnp.logical_and(
+                jnp.any(state.bomb_active),
+                source_bomb_y - source_bomb_spawn_y < (
+                    self.consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1
+                ) * self.consts.BOMB_SIZE[0],
+            ),
+        )
+        burst_in_progress = jnp.logical_or(burst_in_progress, long_burst_in_progress)
         source_ids = ids == state.bomb_source_idx
         can_move = jnp.logical_and(
             can_move,
@@ -1012,9 +1024,16 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.wave_pattern,
         )
         moved_y = state.bomb_y + jnp.where(state.bomb_active, bomb_speed, 0)
+        bomb_despawn_y = self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0]
+        bomb_active_limit = jnp.where(
+            bomb_type == BOMB_TYPE_LONG,
+            bomb_despawn_y
+            + (self.consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1) * self.consts.BOMB_SIZE[0],
+            bomb_despawn_y,
+        )
         bomb_active = jnp.logical_and(
             state.bomb_active,
-            moved_y < self.consts.BUNKER_Y - self._bomb_height_for_wave(state.wave_pattern),
+            moved_y < bomb_active_limit,
         )
 
         # First branch: per-slot jitter logic
@@ -1615,12 +1634,36 @@ class DemonAttackRenderer(JAXGameRenderer):
         bomb_sprite_repeats = self._bomb_sprite_repeats_for_type(bomb_type)
 
         def render_bomb(i, r):
+            source_y = state.demons_y[state.bomb_source_idx] + self.consts.DEMON_SIZE[0]
+            fallen_repeats = (state.bomb_y[i] - source_y) // self.consts.BOMB_SIZE[0]
+            visible_repeats = jnp.where(
+                bomb_type == BOMB_TYPE_LONG,
+                jnp.clip(fallen_repeats + 1, 1, bomb_sprite_repeats),
+                bomb_sprite_repeats,
+            )
+            repeat_offset = jnp.where(
+                bomb_type == BOMB_TYPE_LONG,
+                jnp.clip(fallen_repeats, 0, bomb_sprite_repeats - 1),
+                0,
+            )
+
             def render_bomb_repeat(j, rr):
-                return self.jr.render_at(
-                    rr,
-                    state.bomb_x[i],
-                    state.bomb_y[i] + j * self.consts.BOMB_SIZE[0],
-                    bomb_mask,
+                render_y = (
+                    state.bomb_y[i]
+                    + (j - repeat_offset) * self.consts.BOMB_SIZE[0]
+                )
+                return jax.lax.cond(
+                    jnp.logical_and(
+                        j < visible_repeats,
+                        render_y < self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0],
+                    ),
+                    lambda: self.jr.render_at(
+                        rr,
+                        state.bomb_x[i],
+                        render_y,
+                        bomb_mask,
+                    ),
+                    lambda: rr,
                 )
 
             return jax.lax.cond(
