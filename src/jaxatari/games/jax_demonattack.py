@@ -16,9 +16,11 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
 PATTERNS_PER_DIFFICULTY_ENTRY = 2
+INITIAL_WAVE_NUMBER = 4
 DEMON_STATUS_FREE = 0
 DEMON_STATUS_SPAWNING = 1
 DEMON_STATUS_NORMAL = 2
+DEMON_STATUS_SMALL = 3
 DIFFICULTY_TABLE_NAMES = (
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
@@ -259,6 +261,8 @@ class DemonAttackConstants(struct.PyTreeNode):
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
+    SMALL_DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 10))
+    SMALL_DEMON_SPLIT_Y_OFFSET: int = struct.field(pytree_node=False, default=10)
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=1)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
@@ -315,6 +319,11 @@ class DemonAttackState(struct.PyTreeNode):
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
     demon_x_motion_accumulator: chex.Array  # 8-bit fractional horizontal motion carry per slot
     demon_y_motion_accumulator: chex.Array  # 8-bit fractional vertical motion carry per slot
+    demon_split_x: chex.Array  # X position for the second small demon after a split
+    demon_split_primary_moving_right: chex.Array  # Sweep direction for the first split demon
+    demon_split_moving_right: chex.Array  # Sweep direction for the second split demon
+    demon_split_primary_alive: chex.Array  # First small demon remains independently killable
+    demon_split_secondary_alive: chex.Array  # Second small demon remains independently killable
     demon_status: chex.Array  # Per-slot status: free, spawning, or normal
     demon_phase: chex.Array  # Per-slot movement phase, 0..7
     demon_moving_right: chex.Array  # Per-slot horizontal direction
@@ -424,6 +433,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_x_motion_accumulator=zeros,
             demon_y_motion_accumulator=zeros,
+            demon_split_x=zeros,
+            demon_split_primary_moving_right=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_split_moving_right=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_split_primary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_split_secondary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_status=jnp.full((self.consts.MAX_DEMONS,), DEMON_STATUS_FREE, dtype=jnp.int32),
             demon_phase=jnp.asarray(self.consts.DEMON_INITIAL_PHASE, dtype=jnp.int32),
             demon_moving_right=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
@@ -482,6 +496,137 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_alive=state.demon_status != DEMON_STATUS_FREE,
         )
 
+    @staticmethod
+    def _is_active_demon_status(status: chex.Array) -> chex.Array:
+        return jnp.logical_or(status == DEMON_STATUS_NORMAL, status == DEMON_STATUS_SMALL)
+
+    @staticmethod
+    def _is_small_demon_status(status: chex.Array) -> chex.Array:
+        return status == DEMON_STATUS_SMALL
+
+    def _demon_width_for_status(self, status: chex.Array) -> chex.Array:
+        return jnp.where(
+            self._is_small_demon_status(status),
+            self.consts.SMALL_DEMON_SIZE[1],
+            self.consts.DEMON_SIZE[1],
+        )
+
+    def _demon_height_for_status(self, status: chex.Array) -> chex.Array:
+        return jnp.where(
+            self._is_small_demon_status(status),
+            self.consts.SMALL_DEMON_SIZE[0],
+            self.consts.DEMON_SIZE[0],
+        )
+
+    def _split_active_masks(self, state: DemonAttackState) -> Tuple[chex.Array, chex.Array]:
+        is_small = self._is_small_demon_status(state.demon_status)
+        return (
+            jnp.logical_and(is_small, state.demon_split_primary_alive),
+            jnp.logical_and(is_small, state.demon_split_secondary_alive),
+        )
+
+    def _track_x_toward_player(
+        self,
+        x: chex.Array,
+        width: chex.Array,
+        mask: chex.Array,
+        player_center_x: chex.Array,
+    ) -> chex.Array:
+        center_x = x + width // 2
+        return jnp.where(
+            mask,
+            jnp.clip(
+                x + jnp.sign(player_center_x - center_x).astype(jnp.int32),
+                self.consts.DEMON_MIN_X,
+                self.consts.DEMON_MAX_X,
+            ),
+            x,
+        )
+
+    def _sweep_x(
+        self,
+        x: chex.Array,
+        moving_right: chex.Array,
+        mask: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array]:
+        next_x = x + jnp.where(moving_right, 1, -1)
+        turn = jnp.logical_and(
+            mask,
+            jnp.logical_or(
+                jnp.logical_and(moving_right, next_x >= self.consts.DEMON_MAX_X),
+                jnp.logical_and(jnp.logical_not(moving_right), next_x <= self.consts.DEMON_MIN_X),
+            ),
+        )
+        next_moving_right = jnp.where(turn, jnp.logical_not(moving_right), moving_right)
+        next_x = jnp.where(
+            mask,
+            jnp.clip(next_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X),
+            x,
+        )
+        return next_x, next_moving_right
+
+    def _laser_overlaps_rect(
+        self,
+        state: DemonAttackState,
+        rect_x: chex.Array,
+        rect_y: chex.Array,
+        rect_width: chex.Array,
+        rect_height: chex.Array,
+        laser_right: chex.Array,
+        laser_bottom: chex.Array,
+    ) -> chex.Array:
+        return (
+            jnp.logical_and(
+                jnp.logical_and(laser_right > rect_x, state.laser_x < rect_x + rect_width),
+                jnp.logical_and(state.laser_y < rect_y + rect_height, laser_bottom > rect_y),
+            )
+        )
+
+    def _demon_observation_bounds(
+        self,
+        state: DemonAttackState,
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        split_primary_active, split_secondary_active = self._split_active_masks(state)
+        both_split_parts_active = jnp.logical_and(split_primary_active, split_secondary_active)
+        split_left = jnp.where(
+            both_split_parts_active,
+            jnp.minimum(state.demons_x, state.demon_split_x),
+            jnp.where(split_primary_active, state.demons_x, state.demon_split_x),
+        )
+        split_right = jnp.where(
+            both_split_parts_active,
+            jnp.maximum(state.demons_x, state.demon_split_x)
+            + self.consts.SMALL_DEMON_SIZE[1],
+            split_left + self.consts.SMALL_DEMON_SIZE[1],
+        )
+        is_small = self._is_small_demon_status(state.demon_status)
+        x = jnp.where(is_small, split_left, state.demons_x)
+        y = jnp.where(
+            is_small,
+            jnp.where(
+                split_primary_active,
+                state.demons_y,
+                state.demons_y + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
+            ),
+            state.demons_y,
+        )
+        width = jnp.where(is_small, split_right - split_left, self.consts.DEMON_SIZE[1])
+        height = jnp.where(
+            is_small,
+            jnp.where(
+                both_split_parts_active,
+                self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
+                + self.consts.SMALL_DEMON_SIZE[0],
+                self.consts.SMALL_DEMON_SIZE[0],
+            ),
+            self.consts.DEMON_SIZE[0],
+        )
+        return x, y, width.astype(jnp.int32), height.astype(jnp.int32)
+
+    def _can_split_demons(self, wave_pattern: chex.Array) -> chex.Array:
+        """Waves 5-12 use the separate small-demons after a hit."""
+        return wave_pattern >= 4
+
     def _initialize_wave_state(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
         """Replace the previous wave state with a new initialized wave."""
         state = state.replace(
@@ -538,7 +683,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[DemonAttackObservation, DemonAttackState]:
-        wave_number = jnp.array(0, dtype=jnp.int32)
+        wave_number = jnp.array(INITIAL_WAVE_NUMBER, dtype=jnp.int32)
 
         state = DemonAttackState(
             player_x=jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
@@ -666,9 +811,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
-        return jnp.logical_and(
+        ids = jnp.arange(self.consts.MAX_DEMONS)
+        lowest = ids == self.consts.MAX_DEMONS - 1
+        active = jnp.logical_or(
             state.demon_status == DEMON_STATUS_NORMAL,
-            state.spawn_pause_timer <= 0,
+            jnp.logical_and(
+                self._is_small_demon_status(state.demon_status),
+                jnp.logical_or(
+                    state.demon_split_primary_alive,
+                    state.demon_split_secondary_alive,
+                ),
+            ),
+        )
+        return jnp.logical_and(
+            lowest,
+            jnp.logical_and(active, state.spawn_pause_timer <= 0),
         )
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
@@ -716,7 +873,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # Movement is globally paused while demons are not ready, and locally
         # paused for the demon currently emitting a burst.
-        can_move = self._demons_ready(state)
+        can_move = jnp.logical_and(
+            self._is_active_demon_status(state.demon_status),
+            state.spawn_pause_timer <= 0,
+        )
         rate_by_slot = jnp.asarray(
             self.consts.BOMB_BURST_RATE_BY_SLOT,
             dtype=jnp.int32,
@@ -727,9 +887,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_burst_step <= last_active_rate,
         )
         source_ids = ids == state.bomb_source_idx
-        can_move = jnp.logical_and(
+        source_is_split_secondary = jnp.logical_and(
+            source_ids,
+            jnp.logical_and(
+                self._is_small_demon_status(state.demon_status),
+                state.demon_split_secondary_alive,
+            ),
+        )
+        slot_move = jnp.logical_and(
             can_move,
-            jnp.logical_not(jnp.logical_and(burst_in_progress, source_ids)),
+            jnp.logical_not(
+                jnp.logical_and(
+                    burst_in_progress,
+                    jnp.logical_and(source_ids, jnp.logical_not(source_is_split_secondary)),
+                )
+            ),
         )
 
         # One slot per frame is nudged toward its spacing target. The random
@@ -737,16 +909,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         target_y = self._new_demon_y(state.demons_y, selected)
         selected_mask = ids == selected
         selected_active = frame_mod4 != 0
+        selected_can_move = jnp.logical_and(
+            selected_active,
+            jnp.logical_and(selected_mask, slot_move),
+        )
         demons_y = jnp.where(
-            selected_active & selected_mask,
+            selected_can_move,
             state.demons_y + jnp.where(target_y >= state.demons_y[selected], 1, -1),
             state.demons_y,
         )
         demon_moving_right = jnp.where(
-            selected_active & selected_mask & ((state.demon_random & 7) == 0),
+            jnp.logical_and(selected_can_move, (state.demon_random & 7) == 0),
             jnp.logical_not(state.demon_moving_right),
             state.demon_moving_right,
         )
+        demon_split_moving_right = state.demon_split_moving_right
         phase_mask = ids == frame_mod4
         next_phase = (state.demon_phase + 1) & 7
         next_moving_down = jnp.where(
@@ -772,49 +949,50 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         tele_mask = ids == state.demon_teleport
         tele_status = state.demon_status[state.demon_teleport]
         can_appear = state.wave_spawned_demons < self.consts.WAVE_TOTAL_DEMONS
-        start_spawn = (
-                (state.demon_teleport_timer > 0)
-                & (timer == 0)
-                & (tele_status == DEMON_STATUS_FREE)
-                & can_appear
+        start_spawn = jnp.logical_and(
+            state.demon_teleport_timer > 0,
+            jnp.logical_and(
+                timer == 0,
+                jnp.logical_and(tele_status == DEMON_STATUS_FREE, can_appear),
+            ),
         )
-        finish_spawn = (
-                (state.demon_teleport_timer > 0)
-                & (timer == 0)
-                & (tele_status != DEMON_STATUS_FREE)
+        finish_spawn = jnp.logical_and(
+            state.demon_teleport_timer > 0,
+            jnp.logical_and(timer == 0, tele_status != DEMON_STATUS_FREE),
         )
-        can_schedule = (state.demon_teleport_timer == 0) & can_appear
+        can_schedule = jnp.logical_and(state.demon_teleport_timer == 0, can_appear)
         demon_status = state.demon_status
         free = demon_status == DEMON_STATUS_FREE
         scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(free[::-1].astype(jnp.int32))
-        schedule = can_schedule & jnp.any(free)
+        schedule = jnp.logical_and(can_schedule, jnp.any(free))
 
         # New demons start from the target row for their slot so the formation
         # stays vertically separated as the wave refills.
         demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
         schedule_mask = ids == scheduled
         demons_y = jnp.where(
-            schedule & schedule_mask,
+            jnp.logical_and(schedule, schedule_mask),
             self._new_demon_y(demons_y, scheduled),
             demons_y,
         )
         demon_status = jnp.where(
-            start_spawn & tele_mask,
+            jnp.logical_and(start_spawn, tele_mask),
             DEMON_STATUS_SPAWNING,
             demon_status,
         )
         demon_status = jnp.where(
-            finish_spawn & tele_mask,
+            jnp.logical_and(finish_spawn, tele_mask),
             DEMON_STATUS_NORMAL,
             demon_status,
         )
-        demon_phase = jnp.where(finish_spawn & tele_mask, 0, demon_phase)
-        demon_moving_right = jnp.where(finish_spawn & tele_mask, True, demon_moving_right)
-        demon_moving_down = jnp.where(finish_spawn & tele_mask, True, demon_moving_down)
+        finish_spawn_mask = jnp.logical_and(finish_spawn, tele_mask)
+        demon_phase = jnp.where(finish_spawn_mask, 0, demon_phase)
+        demon_moving_right = jnp.where(finish_spawn_mask, True, demon_moving_right)
+        demon_moving_down = jnp.where(finish_spawn_mask, True, demon_moving_down)
 
         spawn_target_x = self._spawn_target_x(ids)
         demons_x = jnp.where(
-            (start_spawn | finish_spawn) & tele_mask,
+            jnp.logical_and(jnp.logical_or(start_spawn, finish_spawn), tele_mask),
             spawn_target_x,
             state.demons_x,
         )
@@ -829,8 +1007,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_x_motion_accumulator
                 + jnp.asarray(self.consts.DEMON_HORIZONTAL_MOTION_TABLE, dtype=jnp.int32)[demon_phase]
         )
-        move_y = can_move & (y_motion_sum > 255)
-        move_x = can_move & (x_motion_sum > 255)
+        move_y = jnp.logical_and(slot_move, y_motion_sum > 255)
+        move_x = jnp.logical_and(slot_move, x_motion_sum > 255)
 
         demons_y = jnp.where(
             move_y,
@@ -846,15 +1024,81 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x + jnp.where(demon_moving_right, 1, -1),
             demons_x,
         )
-        outside_x = (demons_x < self.consts.DEMON_MIN_X) | (demons_x > self.consts.DEMON_MAX_X)
-        turn = can_move & (
-                (demon_moving_right & (demons_x >= self.consts.DEMON_MAX_X))
-                | (~demon_moving_right & (demons_x <= self.consts.DEMON_MIN_X))
+        outside_x = jnp.logical_or(
+            demons_x < self.consts.DEMON_MIN_X,
+            demons_x > self.consts.DEMON_MAX_X,
         )
-        demons_x = jnp.where(turn & outside_x, previous_x, demons_x)
+        turn = jnp.logical_and(
+            slot_move,
+            jnp.logical_or(
+                jnp.logical_and(demon_moving_right, demons_x >= self.consts.DEMON_MAX_X),
+                jnp.logical_and(
+                    jnp.logical_not(demon_moving_right),
+                    demons_x <= self.consts.DEMON_MIN_X,
+                ),
+            ),
+        )
+        demons_x = jnp.where(jnp.logical_and(turn, outside_x), previous_x, demons_x)
         demon_moving_right = jnp.where(turn, jnp.logical_not(demon_moving_right), demon_moving_right)
         demon_moving_down = jnp.where(turn, True, demon_moving_down)
         demon_phase = jnp.where(turn, 1, demon_phase)
+
+        split_mask = self._is_small_demon_status(demon_status)
+        primary_split_mask = jnp.logical_and(split_mask, state.demon_split_primary_alive)
+        secondary_can_move = jnp.logical_and(
+            can_move,
+            jnp.logical_not(jnp.logical_and(burst_in_progress, source_is_split_secondary)),
+        )
+        secondary_split_mask = jnp.logical_and(split_mask, state.demon_split_secondary_alive)
+        lowest = ids == self.consts.MAX_DEMONS - 1
+        lowest_tracking_mask = jnp.logical_and(
+            lowest,
+            jnp.logical_and(slot_move, demon_status == DEMON_STATUS_NORMAL),
+        )
+        player_center_x = state.player_x + self.consts.PLAYER_SIZE[1] // 2
+        demons_x = self._track_x_toward_player(
+            demons_x,
+            self._demon_width_for_status(demon_status),
+            lowest_tracking_mask,
+            player_center_x,
+        )
+
+        primary_sweep_mask = jnp.logical_and(primary_split_mask, slot_move)
+        primary_sweep_x, demon_split_primary_moving_right = self._sweep_x(
+            state.demons_x,
+            state.demon_split_primary_moving_right,
+            primary_sweep_mask,
+        )
+        demons_x = jnp.where(
+            primary_sweep_mask,
+            primary_sweep_x,
+            demons_x,
+        )
+
+        secondary_tracking_mask = jnp.logical_and(
+            lowest,
+            jnp.logical_and(secondary_split_mask, secondary_can_move),
+        )
+        demon_split_x = self._track_x_toward_player(
+            state.demon_split_x,
+            self.consts.SMALL_DEMON_SIZE[1],
+            secondary_tracking_mask,
+            player_center_x,
+        )
+        secondary_sweep_mask = jnp.logical_and(
+            jnp.logical_not(lowest),
+            jnp.logical_and(secondary_split_mask, secondary_can_move),
+        )
+        secondary_sweep_x, demon_split_moving_right = self._sweep_x(
+            demon_split_x,
+            demon_split_moving_right,
+            secondary_sweep_mask,
+        )
+        demon_split_x = jnp.where(
+            secondary_sweep_mask,
+            secondary_sweep_x,
+            demon_split_x,
+        )
 
         # Keep the three slots ordered top-to-bottom with a minimum gap. This
         # prevents the target nudges from collapsing demon rows.
@@ -876,14 +1120,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # Store the state, then derive the public alive mask and wave-spawned count.
         state = state.replace(
             demons_x=demons_x,
+            demon_split_x=demon_split_x,
+            demon_split_primary_moving_right=demon_split_primary_moving_right,
+            demon_split_moving_right=demon_split_moving_right,
             demons_y=demons_y,
             demon_x_motion_accumulator=jnp.where(
-                can_move,
+                slot_move,
                 x_motion_sum & 255,
                 state.demon_x_motion_accumulator,
             ),
             demon_y_motion_accumulator=jnp.where(
-                can_move,
+                slot_move,
                 y_motion_sum & 255,
                 state.demon_y_motion_accumulator,
             ),
@@ -907,12 +1154,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
             wave_spawned_demons=state.wave_spawned_demons + start_spawn.astype(jnp.int32),
             spawn_anim_timer=jnp.where(
-                start_spawn & tele_mask,
+                jnp.logical_and(start_spawn, tele_mask),
                 self.consts.DEMON_TELEPORT_DURATION,
-                jnp.where(finish_spawn & tele_mask, 0, state.spawn_anim_timer),
+                jnp.where(finish_spawn_mask, 0, state.spawn_anim_timer),
             ),
             spawn_pause_timer=jnp.where(
-                finish_spawn & tele_mask,
+                finish_spawn_mask,
                 self.consts.SPAWN_MOVE_PAUSE,
                 state.spawn_pause_timer,
             ),
@@ -979,7 +1226,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
         bomb_y = jnp.where(bomb_active, moved_y, state.bomb_y)
 
-        # Second branch: choose a random living / ready demon
+        # Second branch: choose the lowest living / ready demon.
         picked_demon_idx = jax.random.randint(
             demon_idx_key,
             (),
@@ -1012,9 +1259,26 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
+        source_is_small = self._is_small_demon_status(state.demon_status[source_idx])
+        source_uses_secondary = jnp.logical_and(
+            source_is_small,
+            state.demon_split_secondary_alive[source_idx],
+        )
+        source_x = jnp.where(
+            source_uses_secondary,
+            state.demon_split_x[source_idx],
+            state.demons_x[source_idx],
+        )
+        source_y = state.demons_y[source_idx] + jnp.where(
+            source_uses_secondary,
+            self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
+            0,
+        )
+        source_width = self._demon_width_for_status(state.demon_status[source_idx])
+        source_height = self._demon_height_for_status(state.demon_status[source_idx])
         base_x = (
-            state.demons_x[source_idx]
-            + self.consts.DEMON_SIZE[1] // 2
+            source_x
+            + source_width // 2
             - self.consts.BOMB_SIZE[1] // 2
         )
 
@@ -1076,8 +1340,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.WIDTH - self.consts.BOUNDARY - self.consts.BOMB_SIZE[1],
         )
         fired_y = (
-            state.demons_y[source_idx]
-            + self.consts.DEMON_SIZE[0]
+            source_y
+            + source_height
         )
 
         should_activate_slot = jnp.logical_and(
@@ -1096,7 +1360,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.where(burst_done, 0, action_limit),
             jnp.maximum(burst_timer - 1, 0),
         )
-        release_source = jnp.logical_and(burst_done, jnp.logical_not(jnp.any(bomb_active)))
+        release_source = jnp.logical_and(
+            jnp.logical_or(burst_done, jnp.logical_not(source_ready)),
+            jnp.logical_not(jnp.any(bomb_active)),
+        )
         next_burst_length = jnp.where(
             release_source,
             jnp.array(0, dtype=jnp.int32),
@@ -1128,64 +1395,133 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         def check_demon_collision(i, carry):
             """
-            The carry contains the current alive mask, score, and laser-active
-            flag. A demon can only be hit after its spawn animation has ended,
-            and a successful hit clears that demon, adds score, and consumes the
-            laser so later demon slots in this loop cannot also be hit.
+            The carry contains the current demon status, score, and laser-active
+            flag. A first hit on later-wave demons splits them into the ROM's
+            small-demon form; a hit on that small demon clears the slot.
             """
-            s_alive, s_score, l_active = carry
+            s_status, s_primary_alive, s_secondary_alive, s_score, l_active = carry
+            is_small = self._is_small_demon_status(s_status[i])
+            is_alive = s_status[i] != DEMON_STATUS_FREE
+            primary_alive = s_primary_alive[i]
+            secondary_alive = s_secondary_alive[i]
 
-            demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
-            demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
+            demon_width = self._demon_width_for_status(s_status[i])
+            demon_height = self._demon_height_for_status(s_status[i])
+            split_demon_y = state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
 
-            overlaps_horizontally = jnp.logical_and(
-                laser_right > state.demons_x[i],
-                state.laser_x < demon_right,
+            primary_overlap = self._laser_overlaps_rect(
+                state,
+                state.demons_x[i],
+                state.demons_y[i],
+                demon_width,
+                demon_height,
+                laser_right,
+                laser_bottom,
             )
-            overlaps_vertically = jnp.logical_and(
-                state.laser_y < demon_bottom,
-                laser_bottom > state.demons_y[i],
-            )
-            rectangles_overlap = jnp.logical_and(
-                overlaps_horizontally,
-                overlaps_vertically,
+            secondary_overlap = self._laser_overlaps_rect(
+                state,
+                state.demon_split_x[i],
+                split_demon_y,
+                self.consts.SMALL_DEMON_SIZE[1],
+                self.consts.SMALL_DEMON_SIZE[0],
+                laser_right,
+                laser_bottom,
             )
             laser_can_hit_demon = jnp.logical_and(
                 l_active,
-                jnp.logical_and(s_alive[i], state.spawn_anim_timer[i] <= 0),
+                jnp.logical_and(is_alive, state.spawn_anim_timer[i] <= 0),
             )
-            demon_hit = jnp.logical_and(
+            normal_hit = jnp.logical_and(
                 laser_can_hit_demon,
-                rectangles_overlap,
+                jnp.logical_and(jnp.logical_not(is_small), primary_overlap),
             )
+            primary_hit = jnp.logical_and(
+                laser_can_hit_demon,
+                jnp.logical_and(
+                    is_small,
+                    jnp.logical_and(primary_alive, primary_overlap),
+                ),
+            )
+            secondary_hit = jnp.logical_and(
+                laser_can_hit_demon,
+                jnp.logical_and(
+                    is_small,
+                    jnp.logical_and(
+                        jnp.logical_not(primary_hit),
+                        jnp.logical_and(secondary_alive, secondary_overlap),
+                    ),
+                ),
+            )
+            demon_hit = jnp.logical_or(normal_hit, jnp.logical_or(primary_hit, secondary_hit))
 
-            new_alive = s_alive.at[i].set(
-                jnp.logical_and(s_alive[i], jnp.logical_not(demon_hit))
+            split_demon = jnp.logical_and(
+                normal_hit,
+                jnp.logical_and(
+                    self._can_split_demons(state.wave_pattern),
+                    s_status[i] == DEMON_STATUS_NORMAL,
+                ),
             )
+            new_primary_alive_value = jnp.where(
+                split_demon,
+                True,
+                jnp.where(primary_hit, False, primary_alive),
+            )
+            new_secondary_alive_value = jnp.where(
+                split_demon,
+                True,
+                jnp.where(secondary_hit, False, secondary_alive),
+            )
+            small_still_alive = jnp.logical_or(new_primary_alive_value, new_secondary_alive_value)
+            new_status = s_status.at[i].set(
+                jnp.where(
+                    split_demon,
+                    DEMON_STATUS_SMALL,
+                    jnp.where(
+                        jnp.logical_and(is_small, demon_hit),
+                        jnp.where(small_still_alive, DEMON_STATUS_SMALL, DEMON_STATUS_FREE),
+                        jnp.where(normal_hit, DEMON_STATUS_FREE, s_status[i]),
+                    ),
+                )
+            )
+            new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
+            new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
             new_score = jnp.where(demon_hit, s_score + 10 + state.wave_pattern * 2, s_score)
             new_laser_active = jnp.logical_and(l_active, jnp.logical_not(demon_hit))
-            return new_alive, new_score, new_laser_active
+            return new_status, new_primary_alive, new_secondary_alive, new_score, new_laser_active
 
         init_carry = (
-            state.demons_alive,
+            state.demon_status,
+            state.demon_split_primary_alive,
+            state.demon_split_secondary_alive,
             state.score,
             state.laser_active,
         )
-        demons_alive, score, laser_active = jax.lax.fori_loop(
+        (
+            demon_status,
+            demon_split_primary_alive,
+            demon_split_secondary_alive,
+            score,
+            laser_active,
+        ) = jax.lax.fori_loop(
             0,
             self.consts.MAX_DEMONS,
             check_demon_collision,
             init_carry,
         )
 
-        demon_killed = jnp.any(
-            jnp.logical_and(
-                state.demons_alive,
-                jnp.logical_not(demons_alive),
-            )
-        ) # boolean if at least one demon was killed
-
-        killed = state.demons_alive & ~demons_alive # which demon was killed
+        killed = jnp.logical_and(
+            state.demon_status != DEMON_STATUS_FREE,
+            demon_status == DEMON_STATUS_FREE,
+        )
+        demon_killed = jnp.any(killed) # boolean if at least one demon was killed
+        split = jnp.logical_and(
+            state.demon_status == DEMON_STATUS_NORMAL,
+            self._is_small_demon_status(demon_status),
+        )
+        center_small_x = state.demons_x
+        second_small_x = state.demons_x + (
+                self.consts.DEMON_SIZE[1] - self.consts.SMALL_DEMON_SIZE[1]
+        )
 
         # Bomb vs Player
         player_hit = jnp.logical_and(
@@ -1240,8 +1576,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         state = state.replace(
-            demons_alive=demons_alive,
-            demon_status=jnp.where(killed, DEMON_STATUS_FREE, state.demon_status),
+            demons_alive=demon_status != DEMON_STATUS_FREE,
+            demons_x=jnp.where(split, center_small_x, state.demons_x),
+            demon_split_x=jnp.where(split, second_small_x, state.demon_split_x),
+            demon_split_primary_moving_right=jnp.where(split, False, state.demon_split_primary_moving_right),
+            demon_split_moving_right=jnp.where(split, True, state.demon_split_moving_right),
+            demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
+            demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
+            demon_status=demon_status,
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
@@ -1288,11 +1630,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             height=jnp.array(self.consts.PLAYER_SIZE[0]),
         )
 
+        demon_x, demon_y, demon_width, demon_height = self._demon_observation_bounds(state)
+
         demons = ObjectObservation.create(
-            x=state.demons_x,
-            y=state.demons_y,
-            width=jnp.full_like(state.demons_x, self.consts.DEMON_SIZE[1], dtype=jnp.int32),
-            height=jnp.full_like(state.demons_y, self.consts.DEMON_SIZE[0], dtype=jnp.int32),
+            x=demon_x,
+            y=demon_y,
+            width=demon_width,
+            height=demon_height,
             active=state.demons_alive
         )
 
@@ -1403,8 +1747,36 @@ class DemonAttackRenderer(JAXGameRenderer):
                 "WAVE_DEMON_TABLE uses zero-based indices into the available "
                 f"demon sprite groups (0..{len(self._demon_sprite_names) - 1})"
             )
+        available_small_demon_ids = tuple(sorted(
+            int(asset["name"].removeprefix("small_demon_"))
+            for asset in final_asset_config
+            if asset["name"].startswith("small_demon_")
+        ))
+        small_demon_index_by_id = {
+            demon_id: i for i, demon_id in enumerate(available_small_demon_ids)
+        }
+        missing_small_demons = [
+            available_demon_ids[demon_index]
+            for demon_index in self.consts.WAVE_DEMON_TABLE[4:]
+            if available_demon_ids[demon_index] not in small_demon_index_by_id
+        ]
+        if missing_small_demons:
+            raise ValueError(
+                "ASSET_CONFIG must provide small demon sprite groups for split "
+                f"patterns: {sorted(set(missing_small_demons))}"
+            )
+        self._small_demon_sprite_names = tuple(
+            f"small_demon_{demon_id}" for demon_id in available_small_demon_ids
+        )
         self._pattern_sprite_indices = jnp.asarray(
             self.consts.WAVE_DEMON_TABLE,
+            dtype=jnp.int32,
+        )
+        self._small_pattern_sprite_indices = jnp.asarray(
+            tuple(
+                small_demon_index_by_id.get(available_demon_ids[demon_index], 0)
+                for demon_index in self.consts.WAVE_DEMON_TABLE
+            ),
             dtype=jnp.int32,
         )
 
@@ -1602,8 +1974,17 @@ class DemonAttackRenderer(JAXGameRenderer):
                 for sprite_name in self._demon_sprite_names
             ],
         )
+        small_sprite_group_idx = self._small_pattern_sprite_indices[pattern_index]
+        small_demon_masks = jax.lax.switch(
+            small_sprite_group_idx,
+            [
+                lambda sprite_name=sprite_name: self.SHAPE_MASKS[sprite_name]
+                for sprite_name in self._small_demon_sprite_names
+            ],
+        )
 
         demon_mask = demon_masks[demon_anim_idx]
+        small_demon_mask = small_demon_masks[demon_anim_idx]
 
         spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
         ids = jnp.arange(self.consts.MAX_DEMONS)
@@ -1666,11 +2047,37 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
             def render_normal():
-                return self.jr.render_at_clipped(
-                    r,
-                    state.demons_x[i],
-                    state.demons_y[i],
-                    demon_mask,
+                def render_split():
+                    split_raster = jax.lax.cond(
+                        state.demon_split_primary_alive[i],
+                        lambda: self.jr.render_at_clipped(
+                            r,
+                            state.demons_x[i],
+                            state.demons_y[i],
+                            small_demon_mask,
+                        ),
+                        lambda: r,
+                    )
+                    return jax.lax.cond(
+                        state.demon_split_secondary_alive[i],
+                        lambda: self.jr.render_at_clipped(
+                            split_raster,
+                            state.demon_split_x[i],
+                            state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
+                            small_demon_mask,
+                        ),
+                        lambda: split_raster,
+                    )
+
+                return jax.lax.cond(
+                    state.demon_status[i] == DEMON_STATUS_SMALL,
+                    render_split,
+                    lambda: self.jr.render_at_clipped(
+                        r,
+                        state.demons_x[i],
+                        state.demons_y[i],
+                        demon_mask,
+                    ),
                 )
 
             return jax.lax.cond(
