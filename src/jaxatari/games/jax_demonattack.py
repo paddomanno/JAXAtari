@@ -16,7 +16,6 @@ from jaxatari.rendering import jax_rendering_utils as render_utils
 INITIAL_WAVE_PATTERNS = 12
 REPEATING_WAVE_PATTERN_START = 8
 PATTERNS_PER_DIFFICULTY_ENTRY = 2
-INITIAL_WAVE_NUMBER = 4
 DEMON_STATUS_FREE = 0
 DEMON_STATUS_SPAWNING = 1
 DEMON_STATUS_NORMAL = 2
@@ -683,7 +682,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def reset(self, key: chex.PRNGKey = jax.random.PRNGKey(42)) -> Tuple[DemonAttackObservation, DemonAttackState]:
-        wave_number = jnp.array(INITIAL_WAVE_NUMBER, dtype=jnp.int32)
+        wave_number = jnp.array(0, dtype=jnp.int32)
 
         state = DemonAttackState(
             player_x=jnp.array(self.consts.PLAYER_X, dtype=jnp.int32),
