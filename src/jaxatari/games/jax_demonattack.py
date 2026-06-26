@@ -796,6 +796,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
+        """Return the demon slots allowed to fire.
+
+        Only the lowest slot fires. A slot is active if it contains a normal
+        demon or a split demon with at least one surviving half, and its
+        post-spawn pause has elapsed.
+        """
         ids = jnp.arange(self.consts.MAX_DEMONS)
         lowest = ids == self.consts.MAX_DEMONS - 1
         active = jnp.logical_or(
