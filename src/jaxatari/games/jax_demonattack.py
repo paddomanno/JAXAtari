@@ -467,19 +467,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _new_demon_y(self, demons_y: chex.Array, demon: chex.Array) -> chex.Array:
         """Choose a vertically spaced target row for a respawning demon slot."""
-        def first():
-            return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + demons_y[1]) // 2
-
-        def second():
-            return (demons_y[0] + demons_y[2]) // 2
-
-        def third():
-            return (
-                demons_y[1]
-                + jnp.array(self.consts.DEMON_MAX_Y, dtype=jnp.int32)
-            ) // 2
-
-        return jax.lax.switch(demon, (first, second, third)).astype(jnp.int32)
+        targets = jnp.stack((
+            (self.consts.DEMON_MIN_Y + demons_y[1]) // 2,
+            (demons_y[0] + demons_y[2]) // 2,
+            (demons_y[1] + self.consts.DEMON_MAX_Y) // 2,
+        ))
+        return targets[demon].astype(jnp.int32)
 
     def _difficulty_value_for_pattern(
         self,
@@ -886,14 +879,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_split_secondary_alive,
             ),
         )
+        source_blocks_primary = jnp.logical_and(
+            burst_in_progress,
+            jnp.logical_and(source_ids, jnp.logical_not(source_is_split_secondary)),
+        )
         slot_move = jnp.logical_and(
             can_move,
-            jnp.logical_not(
-                jnp.logical_and(
-                    burst_in_progress,
-                    jnp.logical_and(source_ids, jnp.logical_not(source_is_split_secondary)),
-                )
-            ),
+            jnp.logical_not(source_blocks_primary),
         )
 
         # One slot per frame is nudged toward its spacing target. The random
