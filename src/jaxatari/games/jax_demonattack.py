@@ -447,6 +447,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_random=jnp.array(self.consts.DEMON_INITIAL_RANDOM, dtype=jnp.int32),
         )
 
+    def _initial_bomb_values(self):
+        return dict(
+            bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
+            bomb_source_idx=jnp.array(0, dtype=jnp.int32),
+            bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
+            bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
+            bomb_action_counter=jnp.array(0, dtype=jnp.int32),
+        )
+
     def _next_demon_random(self, random: chex.Array) -> chex.Array:
         """Advance the deterministic 8-bit demon movement pseudo-random value."""
         shifted = (random * 2) & 255
@@ -635,14 +647,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
-            bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
-            bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
-            bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
-            bomb_source_idx=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
-            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
-            bomb_action_counter=jnp.array(0, dtype=jnp.int32),
+            **self._initial_bomb_values(),
         )
 
         return self._sync_demon_status(state)
@@ -660,12 +665,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             lambda s: s.replace(
                 wave_number=next_wave_number,
                 demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-                bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
-                bomb_source_idx=jnp.array(0, dtype=jnp.int32),
-                bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
-                bomb_burst_length=jnp.array(0, dtype=jnp.int32),
-                bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
-                bomb_action_counter=jnp.array(0, dtype=jnp.int32),
+                **self._initial_bomb_values(),
                 laser_active=jnp.array(False, dtype=jnp.bool_),
                 game_frozen=jnp.array(True, dtype=jnp.bool_),
             ),
@@ -690,14 +690,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             laser_y=jnp.array(0, dtype=jnp.int32),
             laser_active=jnp.array(False, dtype=jnp.bool_),
             **self._initial_demon_values(),
-            bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
-            bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
-            bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
-            bomb_source_idx=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
-            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
-            bomb_action_counter=jnp.array(0, dtype=jnp.int32),
+            **self._initial_bomb_values(),
             score=jnp.array(0, dtype=jnp.int32),
             lives=jnp.array(self.consts.INIT_BUNKERS, dtype=jnp.int32),
             player_exploding=jnp.array(False, dtype=jnp.bool_),
