@@ -273,9 +273,9 @@ class DemonAttackConstants(struct.PyTreeNode):
     )
     WAVE_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG, BOMB_TYPE_LONG), # TODO needs correct values
+        default=(BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
+            BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
+            BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG),
     )
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
