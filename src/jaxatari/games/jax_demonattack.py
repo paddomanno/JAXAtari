@@ -207,6 +207,30 @@ def _get_default_asset_config() -> tuple:
         {'name': 'bunker', 'type': 'single', 'file': 'Bunker.npy'},
     )
 
+def _bomb_visible_repeat_window(state, consts, bomb_type):
+    """Return visible repeat count and leading-repeat offset for enemy shots."""
+    source_y = state.demons_y[state.bomb_source_idx] + consts.DEMON_SIZE[0]
+    fallen_repeats = (state.bomb_y - source_y) // consts.BOMB_SIZE[0]
+    visible_repeats = jnp.where(
+        bomb_type == BOMB_TYPE_LONG,
+        jnp.clip(
+            fallen_repeats + 1,
+            1,
+            consts.LONG_BOMB_HEIGHT_MULTIPLIER,
+        ),
+        1,
+    )
+    repeat_offset = jnp.where(
+        bomb_type == BOMB_TYPE_LONG,
+        jnp.clip(
+            fallen_repeats,
+            0,
+            consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1,
+        ),
+        0,
+    )
+    return visible_repeats, repeat_offset
+
 class DemonAttackConstants(struct.PyTreeNode):
     # Static Configuration
     WIDTH: int = struct.field(pytree_node=False, default=160)
@@ -503,6 +527,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.BOMB_SIZE[0] * self.consts.LONG_BOMB_HEIGHT_MULTIPLIER,
             self.consts.BOMB_SIZE[0],
         )
+
+    def _bomb_visible_repeat_window(
+        self, state: DemonAttackState
+    ) -> Tuple[chex.Array, chex.Array]:
+        bomb_type = self._bomb_type_for_wave(state.wave_pattern)
+        return _bomb_visible_repeat_window(state, self.consts, bomb_type)
+
+    def _bomb_collision_y_bounds(
+        self, state: DemonAttackState
+    ) -> Tuple[chex.Array, chex.Array]:
+        """Return top and bottom y bounds for the currently visible enemy shots."""
+        visible_repeats, repeat_offset = self._bomb_visible_repeat_window(state)
+        bomb_top = state.bomb_y - repeat_offset * self.consts.BOMB_SIZE[0]
+        bomb_bottom = bomb_top + visible_repeats * self.consts.BOMB_SIZE[0]
+        return bomb_top, bomb_bottom
 
     def _bomb_burst_length_for_type(
         self, bomb_type: chex.Array, random_burst_length: chex.Array
@@ -1262,11 +1301,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         killed = state.demons_alive & ~demons_alive # which demon was killed
 
         # Bomb vs Player
-        bomb_width, bomb_height = self._bomb_observation_size(state)
+        bomb_width, _ = self._bomb_observation_size(state)
         player_right = state.player_x + self.consts.PLAYER_SIZE[1]
         player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
         bomb_right = state.bomb_x + bomb_width
-        bomb_bottom = state.bomb_y + bomb_height
+        bomb_top, bomb_bottom = self._bomb_collision_y_bounds(state)
         player_hit = jnp.logical_and(
             state.bomb_active,
             jnp.logical_and(
@@ -1274,7 +1313,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 jnp.logical_and(
                     state.bomb_x < player_right,
                     jnp.logical_and(
-                        state.bomb_y < player_bottom,
+                        bomb_top < player_bottom,
                         bomb_bottom > self.consts.PLAYER_Y,
                     ),
                 )
@@ -1632,29 +1671,21 @@ class DemonAttackRenderer(JAXGameRenderer):
         bomb_mask = self.SHAPE_MASKS["projectile_demon"]
         bomb_type = self._bomb_type_for_wave(state.wave_pattern)
         bomb_sprite_repeats = self._bomb_sprite_repeats_for_type(bomb_type)
+        visible_bomb_repeats, bomb_repeat_offsets = _bomb_visible_repeat_window(
+            state,
+            self.consts,
+            bomb_type,
+        )
 
         def render_bomb(i, r):
-            source_y = state.demons_y[state.bomb_source_idx] + self.consts.DEMON_SIZE[0]
-            fallen_repeats = (state.bomb_y[i] - source_y) // self.consts.BOMB_SIZE[0]
-            visible_repeats = jnp.where(
-                bomb_type == BOMB_TYPE_LONG,
-                jnp.clip(fallen_repeats + 1, 1, bomb_sprite_repeats),
-                bomb_sprite_repeats,
-            )
-            repeat_offset = jnp.where(
-                bomb_type == BOMB_TYPE_LONG,
-                jnp.clip(fallen_repeats, 0, bomb_sprite_repeats - 1),
-                0,
-            )
-
             def render_bomb_repeat(j, rr):
                 render_y = (
                     state.bomb_y[i]
-                    + (j - repeat_offset) * self.consts.BOMB_SIZE[0]
+                    + (j - bomb_repeat_offsets[i]) * self.consts.BOMB_SIZE[0]
                 )
                 return jax.lax.cond(
                     jnp.logical_and(
-                        j < visible_repeats,
+                        j < visible_bomb_repeats[i],
                         render_y < self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0],
                     ),
                     lambda: self.jr.render_at(
