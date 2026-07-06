@@ -1073,7 +1073,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         source_ids = ids == state.bomb_source_idx
         source_blocks_primary = jnp.logical_and(
             burst_in_progress,
-                source_ids,
+            source_ids,
         )
         slot_move = jnp.logical_and(
             can_move,
@@ -1258,13 +1258,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             player_center_x,
         )
 
-        demon_split_x = state.demon_split_x
-        secondary_sweep_x, demon_split_moving_right = self._sweep_x(
-            demon_split_x,
+        demon_split_x, demon_split_moving_right = self._sweep_x(
+            state.demon_split_x,
             demon_split_moving_right,
             secondary_sweep_mask,
         )
-        demon_split_x = secondary_sweep_x
 
         # Keep the three slots ordered top-to-bottom with a minimum gap. This
         # prevents the target nudges from collapsing demon rows.
@@ -1585,9 +1583,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
             demon_width = self._demon_width_for_status(s_status[i])
             demon_height = self._demon_height_for_status(s_status[i])
-            split_demon_y = (
-                    state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
-            )
+            split_demon_y = state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
 
             primary_overlap = self._laser_overlaps_rect(
                 state,
