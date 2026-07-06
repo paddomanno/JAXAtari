@@ -357,11 +357,10 @@ class DemonAttackState(struct.PyTreeNode):
     demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
     demon_x_motion_accumulator: chex.Array  # 8-bit fractional horizontal motion carry per slot
     demon_y_motion_accumulator: chex.Array  # 8-bit fractional vertical motion carry per slot
-    demon_split_x: chex.Array  # X position for the second small demon after a split
-    demon_split_primary_moving_right: chex.Array  # Sweep direction for the first split demon
-    demon_split_moving_right: chex.Array  # Sweep direction for the second split demon
-    demon_split_primary_alive: chex.Array  # First small demon remains independently killable
-    demon_split_secondary_alive: chex.Array  # Second small demon remains independently killable
+    demon_split_x: chex.Array  # X position for the lower small demon after a split
+    demon_split_moving_right: chex.Array  # Sweep direction for the lower small demon
+    demon_split_primary_alive: chex.Array  # Upper small demon remains independently killable
+    demon_split_secondary_alive: chex.Array  # Lower small demon remains independently killable
     demon_status: chex.Array  # Per-slot status: free, spawning, or normal
     demon_phase: chex.Array  # Per-slot movement phase, 0..7
     demon_moving_right: chex.Array  # Per-slot horizontal direction
@@ -477,7 +476,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_x_motion_accumulator=zeros,
             demon_y_motion_accumulator=zeros,
             demon_split_x=zeros,
-            demon_split_primary_moving_right=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_split_moving_right=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_split_primary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
             demon_split_secondary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
@@ -631,6 +629,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _split_active_masks(self, state: DemonAttackState) -> Tuple[chex.Array, chex.Array]:
+        """Return alive masks for the two independently hittable small demons."""
         is_small = self._is_small_demon_status(state.demon_status)
         return (
             jnp.logical_and(is_small, state.demon_split_primary_alive),
@@ -644,6 +643,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         mask: chex.Array,
         player_center_x: chex.Array,
     ) -> chex.Array:
+        """Move masked x positions one pixel toward the player's center."""
         center_x = x + width // 2
         return jnp.where(
             mask,
@@ -661,6 +661,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         moving_right: chex.Array,
         mask: chex.Array,
     ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Split demons use two movement rules: the upper small demon keeps the
+        slot's normal ``demons_x``/tracking behavior, while the lower small
+        demon uses ``demon_split_x`` and sweeps left/right independently.
+        """
         next_x = x + jnp.where(moving_right, 1, -1)
         turn = jnp.logical_and(
             mask,
@@ -698,6 +703,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         self,
         state: DemonAttackState,
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+        """
+        A normal demon maps directly to ``demons_x``/``demons_y`` and
+        ``DEMON_SIZE``. After a split, the two small demons still occupy one
+        logical demon slot, so the observation reports the smallest rectangle
+        covering whichever split parts are still alive.
+        """
         split_primary_active, split_secondary_active = self._split_active_masks(state)
         both_split_parts_active = jnp.logical_and(split_primary_active, split_secondary_active)
         split_left = jnp.where(
@@ -1262,7 +1273,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         state = state.replace(
             demons_x=demons_x,
             demon_split_x=demon_split_x,
-            demon_split_primary_moving_right=state.demon_split_primary_moving_right,
             demon_split_moving_right=demon_split_moving_right,
             demons_y=demons_y,
             demon_x_motion_accumulator=jnp.where(
@@ -1730,7 +1740,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_alive=demon_status != DEMON_STATUS_FREE,
             demons_x=jnp.where(split, center_small_x, state.demons_x),
             demon_split_x=jnp.where(split, second_small_x, state.demon_split_x),
-            demon_split_primary_moving_right=jnp.where(split, False, state.demon_split_primary_moving_right),
             demon_split_moving_right=jnp.where(split, True, state.demon_split_moving_right),
             demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
             demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
