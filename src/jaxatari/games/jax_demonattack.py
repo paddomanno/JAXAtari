@@ -288,7 +288,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
-    TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
+    TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=0) # starting in this wave, the demons begin using projectiles that follow the demon
 
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
@@ -322,7 +322,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 0, 1, 0, 0, -1, 0),
+        default=(0, 0, 0, 0, 0, 0, 0),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
@@ -1147,16 +1147,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             moved_y < bomb_active_limit,
         )
 
-        def _add_bomb_x_offset(_base_x: chex.Array) -> chex.Array:
-            """
-            Add offsets to each demon bomb to form the basic burst structure (2 rows) without jitter
-            """
-            x_offsets = jnp.asarray(
-                self.consts.BOMB_BURST_X_OFFSETS,
-                dtype=jnp.int32,
-            )
-            return _base_x + x_offsets
-
         def _calc_burst_base_x(_source_idx: chex.Array, _state: DemonAttackState) -> chex.Array:
             """
             Calculate the center of the demon bomb burst.
@@ -1184,7 +1174,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         def use_tracking_bombs(s):
             _base_x = _calc_burst_base_x(s.bomb_source_idx, s)
-            return _add_bomb_x_offset(_base_x)
+            bomb_type = self._bomb_type_for_wave(state.wave_pattern)
+            return _base_x + self._bomb_x_offsets_for_type(bomb_type)
 
         def use_normal_bombs(s):
             return s.bomb_x
@@ -1196,11 +1187,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             operand=state,
         )
 
-        moved_x = jnp.clip(
-            x_before_jitter + jnp.where(bomb_active, jitter_x, 0),
-            self.consts.BOUNDARY,
-            self.consts.WIDTH - self.consts.BOUNDARY - self.consts.BOMB_SIZE[1],
-        )
+        moved_x = x_before_jitter + jnp.where(bomb_active, jitter_x, 0)
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
         bomb_y = jnp.where(bomb_active, moved_y, state.bomb_y)
 
@@ -1275,7 +1262,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         x_offsets = self._bomb_x_offsets_for_type(bomb_type)
-        fired_x = _add_bomb_x_offset(base_x)
+        fired_x = base_x + x_offsets
         fired_y = (
             state.demons_y[source_idx]
             + self.consts.DEMON_SIZE[0]
