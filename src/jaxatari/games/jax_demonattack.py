@@ -1203,16 +1203,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         # Reverse direction at the side wall, but only for slots that advanced
         # horizontally on this frame.
-        turn = jnp.logical_and(
-            slot_move,
-            jnp.logical_or(
-                jnp.logical_and(demon_moving_right, demons_x >= self.consts.DEMON_MAX_X),
-                jnp.logical_and(
-                    jnp.logical_not(demon_moving_right),
-                    demons_x <= self.consts.DEMON_MIN_X,
-                ),
-            ),
+        hit_right = jnp.logical_and(demon_moving_right, demons_x >= self.consts.DEMON_MAX_X)
+        hit_left = jnp.logical_and(
+            jnp.logical_not(demon_moving_right),
+            demons_x <= self.consts.DEMON_MIN_X,
         )
+        turn = jnp.logical_and(slot_move, jnp.logical_or(hit_right, hit_left))
         demons_x = jnp.where(jnp.logical_and(turn, outside_x), previous_x, demons_x)
         demon_moving_right = jnp.where(turn, jnp.logical_not(demon_moving_right), demon_moving_right)
         demon_moving_down = jnp.where(turn, True, demon_moving_down)
@@ -1259,11 +1255,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_moving_right,
             secondary_sweep_mask,
         )
-        demon_split_x = jnp.where(
-            secondary_sweep_mask,
-            secondary_sweep_x,
-            demon_split_x,
-        )
+        demon_split_x = secondary_sweep_x
 
         # Keep the three slots ordered top-to-bottom with a minimum gap. This
         # prevents the target nudges from collapsing demon rows.
