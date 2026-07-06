@@ -288,7 +288,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
-    TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=0) # starting in this wave, the demons begin using projectiles that follow the demon
+    TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
