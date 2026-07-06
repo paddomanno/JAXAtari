@@ -1175,7 +1175,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         def use_tracking_bombs(s):
             _base_x = _calc_burst_base_x(s.bomb_source_idx, s)
             bomb_type = self._bomb_type_for_wave(state.wave_pattern)
-            return _base_x + self._bomb_x_offsets_for_type(bomb_type)
+            tracked_x = _base_x + self._bomb_x_offsets_for_type(bomb_type)
+            # Stop tracking once the original source demon is dead/respawning,
+            # otherwise the bomb snaps to whatever new demon reuses that slot.
+            source_still_ready = ready_demons[s.bomb_source_idx]
+            return jnp.where(source_still_ready, tracked_x, s.bomb_x)
 
         def use_normal_bombs(s):
             return s.bomb_x
