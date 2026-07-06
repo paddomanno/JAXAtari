@@ -293,6 +293,8 @@ class DemonAttackConstants(struct.PyTreeNode):
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
+    SMALL_DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 10))
+    SMALL_DEMON_SPLIT_Y_OFFSET: int = struct.field(pytree_node=False, default=8)
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=1)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
@@ -447,7 +449,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
-        wave_number = jnp.maximum(wave_number, 0)
+        wave_number = jnp.maximum(wave_number, 8)
         repeating_pattern_count = (
             INITIAL_WAVE_PATTERNS - REPEATING_WAVE_PATTERN_START
         )
@@ -911,10 +913,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demon_status == DEMON_STATUS_NORMAL,
             jnp.logical_and(
                 self._is_small_demon_status(state.demon_status),
-                jnp.logical_or(
-                    state.demon_split_primary_alive,
-                    state.demon_split_secondary_alive,
-                ),
+                state.demon_split_primary_alive,
             ),
         )
         return jnp.logical_and(
@@ -1038,16 +1037,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         burst_in_progress = jnp.logical_or(burst_in_progress, long_burst_in_progress)
         source_ids = ids == state.bomb_source_idx
-        source_is_split_secondary = jnp.logical_and(
-            source_ids,
-            jnp.logical_and(
-                self._is_small_demon_status(state.demon_status),
-                state.demon_split_secondary_alive,
-            ),
-        )
         source_blocks_primary = jnp.logical_and(
             burst_in_progress,
-            jnp.logical_and(source_ids, jnp.logical_not(source_is_split_secondary)),
+                source_ids,
         )
         slot_move = jnp.logical_and(
             can_move,
@@ -1202,15 +1194,28 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         split_mask = self._is_small_demon_status(demon_status)
         primary_split_mask = jnp.logical_and(split_mask, state.demon_split_primary_alive)
+        source_paused = jnp.logical_and(burst_in_progress, source_ids)
+        primary_split_can_track = jnp.logical_and(
+            slot_move,
+            jnp.logical_and(primary_split_mask, jnp.logical_not(source_paused)),
+        )
+        demons_x = jnp.where(
+            jnp.logical_and(primary_split_mask, source_paused),
+            state.demons_x,
+            demons_x,
+        )
         secondary_can_move = jnp.logical_and(
             can_move,
-            jnp.logical_not(jnp.logical_and(burst_in_progress, source_is_split_secondary)),
+            jnp.logical_and(selected_active, selected_mask),
         )
         secondary_split_mask = jnp.logical_and(split_mask, state.demon_split_secondary_alive)
         lowest = ids == self.consts.MAX_DEMONS - 1
         lowest_tracking_mask = jnp.logical_and(
             lowest,
-            jnp.logical_and(slot_move, demon_status == DEMON_STATUS_NORMAL),
+            jnp.logical_or(
+                jnp.logical_and(slot_move, demon_status == DEMON_STATUS_NORMAL),
+                primary_split_can_track,
+            ),
         )
         player_center_x = state.player_x + self.consts.PLAYER_SIZE[1] // 2
         demons_x = self._track_x_toward_player(
@@ -1220,32 +1225,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             player_center_x,
         )
 
-        primary_sweep_mask = jnp.logical_and(primary_split_mask, slot_move)
-        primary_sweep_x, demon_split_primary_moving_right = self._sweep_x(
-            state.demons_x,
-            state.demon_split_primary_moving_right,
-            primary_sweep_mask,
-        )
-        demons_x = jnp.where(
-            primary_sweep_mask,
-            primary_sweep_x,
-            demons_x,
-        )
-
-        secondary_tracking_mask = jnp.logical_and(
-            lowest,
-            jnp.logical_and(secondary_split_mask, secondary_can_move),
-        )
-        demon_split_x = self._track_x_toward_player(
-            state.demon_split_x,
-            self.consts.SMALL_DEMON_SIZE[1],
-            secondary_tracking_mask,
-            player_center_x,
-        )
-        secondary_sweep_mask = jnp.logical_and(
-            jnp.logical_not(lowest),
-            jnp.logical_and(secondary_split_mask, secondary_can_move),
-        )
+        demon_split_x = state.demon_split_x
+        secondary_sweep_mask = jnp.logical_and(secondary_split_mask, secondary_can_move)
         secondary_sweep_x, demon_split_moving_right = self._sweep_x(
             demon_split_x,
             demon_split_moving_right,
@@ -1278,7 +1259,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         state = state.replace(
             demons_x=demons_x,
             demon_split_x=demon_split_x,
-            demon_split_primary_moving_right=demon_split_primary_moving_right,
+            demon_split_primary_moving_right=state.demon_split_primary_moving_right,
             demon_split_moving_right=demon_split_moving_right,
             demons_y=demons_y,
             demon_x_motion_accumulator=jnp.where(
@@ -1411,21 +1392,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
-        source_is_small = self._is_small_demon_status(state.demon_status[source_idx])
-        source_uses_secondary = jnp.logical_and(
-            source_is_small,
-            state.demon_split_secondary_alive[source_idx],
-        )
-        source_x = jnp.where(
-            source_uses_secondary,
-            state.demon_split_x[source_idx],
-            state.demons_x[source_idx],
-        )
-        source_y = state.demons_y[source_idx] + jnp.where(
-            source_uses_secondary,
-            self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
-            0,
-        )
+        source_x = state.demons_x[source_idx]
+        source_y = state.demons_y[source_idx]
         source_width = self._demon_width_for_status(state.demon_status[source_idx])
         source_height = self._demon_height_for_status(state.demon_status[source_idx])
         base_x = (
@@ -1566,8 +1534,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             primary_alive = s_primary_alive[i]
             secondary_alive = s_secondary_alive[i]
 
-            demon_width = self._demon_width_for_status(status)
-            demon_height = self._demon_height_for_status(status)
+            demon_width = self._demon_width_for_status(s_status[i])
+            demon_height = self._demon_height_for_status(s_status[i])
             split_demon_y = (
                     state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
             )
