@@ -361,7 +361,7 @@ class DemonAttackState(struct.PyTreeNode):
     demon_split_moving_right: chex.Array  # Sweep direction for the lower small demon
     demon_split_primary_alive: chex.Array  # Upper small demon remains independently killable
     demon_split_secondary_alive: chex.Array  # Lower small demon remains independently killable
-    demon_status: chex.Array  # Per-slot status: free, spawning, or normal
+    demon_status: chex.Array  # Per-slot status: free, spawning, normal, or small
     demon_phase: chex.Array  # Per-slot movement phase, 0..7
     demon_moving_right: chex.Array  # Per-slot horizontal direction
     demon_moving_down: chex.Array  # Per-slot vertical direction
@@ -901,6 +901,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _update_spawn_timers(self, state: DemonAttackState) -> DemonAttackState:
         """Advance spawn animation and post-spawn movement-pause timers."""
         next_spawn_anim_timer = jnp.maximum(state.spawn_anim_timer - 1, 0)
+        next_death_anim_timer = jnp.maximum(state.demon_death_anim_timer - 1, 0)
         pause_can_tick = jnp.logical_and(
             state.spawn_anim_timer <= 0,
             state.spawn_pause_timer > 0,
@@ -913,7 +914,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.spawn_pause_timer - 1,
                 state.spawn_pause_timer,
             ),
-            demon_death_anim_timer=jnp.maximum(state.demon_death_anim_timer - 1, 0),
+            demon_death_anim_timer=next_death_anim_timer,
         )
 
     def _demons_ready(self, state: DemonAttackState) -> chex.Array:
@@ -934,7 +935,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         return jnp.logical_and(
             lowest,
-            jnp.logical_and(active, state.spawn_pause_timer <= 0),
+            jnp.logical_and(
+                active,
+                jnp.logical_and(
+                    state.spawn_pause_timer <= 0,
+                    state.demon_death_anim_timer <= 0,
+                ),
+            ),
         )
 
     def _active_demon_idx(self) -> chex.Array:
@@ -1029,7 +1036,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # paused for the demon currently emitting a burst.
         can_move = jnp.logical_and(
             self._is_active_demon_status(state.demon_status),
-            state.spawn_pause_timer <= 0,
+            jnp.logical_and(
+                state.spawn_pause_timer <= 0,
+                state.demon_death_anim_timer <= 0,
+            ),
         )
         rate_by_slot = jnp.asarray(
             self.consts.BOMB_BURST_RATE_BY_SLOT,
@@ -1575,7 +1585,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 l_active,
                 jnp.logical_and(
                     is_alive,
-                    state.spawn_anim_timer[i] <= 0,
+                    jnp.logical_and(
+                        state.spawn_anim_timer[i] <= 0,
+                        state.demon_death_anim_timer[i] <= 0,
+                    ),
                 ),
             )
 
@@ -1750,7 +1763,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_teleport=jnp.where(demon_killed, jnp.argmax(killed.astype(jnp.int32)), state.demon_teleport),
             demon_teleport_timer=jnp.where(demon_killed, 0, state.demon_teleport_timer),
             demon_death_anim_timer=jnp.where(
-                killed,
+                jnp.logical_or(killed, split),
                 self.consts.DEMON_DEATH_ANIMATION_DURATION,
                 state.demon_death_anim_timer,
             ),
@@ -2321,13 +2334,17 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
             return jax.lax.cond(
-                state.demons_alive[i],
+                is_dying,
+                render_death,
                 lambda: jax.lax.cond(
-                    is_spawning,
-                    render_spawn,
-                    render_normal,
+                    state.demons_alive[i],
+                    lambda: jax.lax.cond(
+                        is_spawning,
+                        render_spawn,
+                        render_normal,
+                    ),
+                    lambda: r,
                 ),
-                lambda: jax.lax.cond(is_dying, render_death, lambda: r),
             )
 
         return jax.lax.fori_loop(0, self.consts.MAX_DEMONS, render_demon, raster)
