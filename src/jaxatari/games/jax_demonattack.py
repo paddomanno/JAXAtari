@@ -661,25 +661,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         moving_right: chex.Array,
         mask: chex.Array,
     ) -> Tuple[chex.Array, chex.Array]:
-        """
-        Split demons use two movement rules: the upper small demon keeps the
-        slot's normal ``demons_x``/tracking behavior, while the lower small
-        demon uses ``demon_split_x`` and sweeps left/right independently.
-        """
+        """Move active split-demon x positions one pixel, bouncing at side walls."""
         next_x = x + jnp.where(moving_right, 1, -1)
-        turn = jnp.logical_and(
-            mask,
-            jnp.logical_or(
-                jnp.logical_and(moving_right, next_x >= self.consts.DEMON_MAX_X),
-                jnp.logical_and(jnp.logical_not(moving_right), next_x <= self.consts.DEMON_MIN_X),
-            ),
+        hit_right = jnp.logical_and(moving_right, next_x >= self.consts.DEMON_MAX_X)
+        hit_left = jnp.logical_and(
+            jnp.logical_not(moving_right),
+            next_x <= self.consts.DEMON_MIN_X,
         )
+        turn = jnp.logical_and(mask, jnp.logical_or(hit_right, hit_left))
         next_moving_right = jnp.where(turn, jnp.logical_not(moving_right), moving_right)
-        next_x = jnp.where(
-            mask,
-            jnp.clip(next_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X),
-            x,
-        )
+        next_x = jnp.clip(next_x, self.consts.DEMON_MIN_X, self.consts.DEMON_MAX_X)
+        next_x = jnp.where(mask, next_x, x)
         return next_x, next_moving_right
 
     def _laser_overlaps_rect(
@@ -1200,6 +1192,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x < self.consts.DEMON_MIN_X,
             demons_x > self.consts.DEMON_MAX_X,
         )
+        # Reverse direction at the side wall, but only for slots that advanced
+        # horizontally on this frame.
         turn = jnp.logical_and(
             slot_move,
             jnp.logical_or(
