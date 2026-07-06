@@ -26,30 +26,6 @@ DIFFICULTY_TABLE_NAMES = (
     "WAVE_LASER_SPEED_TABLE",
 )
 
-def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
-    digits = np.zeros((10, 8, 8, 4), dtype=np.uint8)
-    color = np.array((*consts.SCORE_COLOR, 255), dtype=np.uint8)
-
-    patterns = [
-        [[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]],
-        [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]],
-        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 0, 0], [1, 1, 1]],
-        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-        [[1, 0, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [0, 0, 1]],
-        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]],
-        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-    ]
-
-    for i, pattern in enumerate(patterns):
-        for r, row in enumerate(pattern):
-            for c, val in enumerate(row):
-                if val:
-                    digits[i, r + 1, c + 2] = color
-
-    return jnp.array(digits)
 
 def _get_default_asset_config() -> tuple:
     """
@@ -205,7 +181,10 @@ def _get_default_asset_config() -> tuple:
             'PlayerDeathAnimation/Explode_7.npy',
         ]},
         {'name': 'bunker', 'type': 'single', 'file': 'Bunker.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': 'demonattack_score_{}.npy'},
+
     )
+
 
 def _bomb_visible_repeat_window(state, consts, bomb_type):
     """Return visible repeat count and leading-repeat offset for enemy shots."""
@@ -230,6 +209,7 @@ def _bomb_visible_repeat_window(state, consts, bomb_type):
         0,
     )
     return visible_repeats, repeat_offset
+
 
 class DemonAttackConstants(struct.PyTreeNode):
     # Static Configuration
@@ -265,7 +245,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
     DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=4)
-    MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
+    MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84)  # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
     WAVE_DEMON_TABLE: Tuple[int, ...] = struct.field(
@@ -275,8 +255,8 @@ class DemonAttackConstants(struct.PyTreeNode):
     WAVE_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
-            BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG),
+                 BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
+                 BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG),
     )
     WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
@@ -286,7 +266,7 @@ class DemonAttackConstants(struct.PyTreeNode):
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
-    ) # TODO needs adjustments
+    )  # TODO needs adjustments
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
     PLAYER_Y: int = struct.field(pytree_node=False, default=174)
@@ -330,17 +310,18 @@ class DemonAttackConstants(struct.PyTreeNode):
 
     # Boundaries
     BOUNDARY = 25
-    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY) # left boundary for player
-    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for player
+    PLAYER_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for player
+    PLAYER_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY)  # right boundary for player
     DEMON_MIN_X: int = struct.field(pytree_node=False, default=BOUNDARY)  # left boundary for demons
-    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY) # right boundary for demons
+    DEMON_MAX_X: int = struct.field(pytree_node=False, default=160 - BOUNDARY)  # right boundary for demons
     DEMON_MIN_Y: int = struct.field(pytree_node=False, default=20)  # top boundary for demons
-    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100) # bottom boundary for demons
+    DEMON_MAX_Y: int = struct.field(pytree_node=False, default=100)  # bottom boundary for demons
 
     # Colors
     SCORE_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(194, 169, 53))
 
     ASSET_CONFIG: tuple = struct.field(pytree_node=False, default_factory=_get_default_asset_config)
+
 
 class DemonAttackState(struct.PyTreeNode):
     player_x: chex.Array
@@ -375,8 +356,8 @@ class DemonAttackState(struct.PyTreeNode):
     lives: chex.Array
     player_exploding: chex.Array
     explosion_timer: chex.Array
-    wave_number: chex.Array # Actual attack wave: 0, 1, 2, ...
-    wave_pattern: chex.Array # Level pattern: 0..11, then repeating 8..11.
+    wave_number: chex.Array  # Actual attack wave: 0, 1, 2, ...
+    wave_pattern: chex.Array  # Level pattern: 0..11, then repeating 8..11.
     spawn_anim_timer: chex.Array
     spawn_pause_timer: chex.Array
     game_frozen: chex.Array
@@ -384,6 +365,7 @@ class DemonAttackState(struct.PyTreeNode):
 
     step_counter: chex.Array
     key: chex.PRNGKey
+
 
 class DemonAttackObservation(struct.PyTreeNode):
     player: ObjectObservation
@@ -393,10 +375,12 @@ class DemonAttackObservation(struct.PyTreeNode):
     score: jnp.ndarray
     lives: jnp.ndarray
 
+
 class DemonAttackInfo(struct.PyTreeNode):
     time: jnp.ndarray
     wave_number: jnp.ndarray
     wave_pattern: jnp.ndarray
+
 
 class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, DemonAttackInfo, DemonAttackConstants]):
     ACTION_SET: jnp.ndarray = jnp.array(
@@ -414,7 +398,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _validate_wave_configuration(consts: DemonAttackConstants) -> None:
         """Fail early when custom wave tables cannot be indexed consistently."""
         expected_difficulty_entries = (
-            INITIAL_WAVE_PATTERNS // PATTERNS_PER_DIFFICULTY_ENTRY
+                INITIAL_WAVE_PATTERNS // PATTERNS_PER_DIFFICULTY_ENTRY
         )
         invalid_tables = [
             name
@@ -443,7 +427,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
         wave_number = jnp.maximum(wave_number, 0)
         repeating_pattern_count = (
-            INITIAL_WAVE_PATTERNS - REPEATING_WAVE_PATTERN_START
+                INITIAL_WAVE_PATTERNS - REPEATING_WAVE_PATTERN_START
         )
         return jnp.where(
             wave_number < INITIAL_WAVE_PATTERNS,
@@ -484,6 +468,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _new_demon_y(self, demons_y: chex.Array, demon: chex.Array) -> chex.Array:
         """Choose a vertically spaced target row for a respawning demon slot."""
+
         def first():
             return (jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32) + demons_y[1]) // 2
 
@@ -492,17 +477,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         def third():
             return (
-                demons_y[1]
-                + jnp.array(self.consts.DEMON_MAX_Y, dtype=jnp.int32)
+                    demons_y[1]
+                    + jnp.array(self.consts.DEMON_MAX_Y, dtype=jnp.int32)
             ) // 2
 
         return jax.lax.switch(demon, (first, second, third)).astype(jnp.int32)
 
     def _difficulty_value_for_pattern(
-        self,
-        table: Tuple,
-        wave_pattern: chex.Array,
-        dtype=jnp.int32,
+            self,
+            table: Tuple,
+            wave_pattern: chex.Array,
+            dtype=jnp.int32,
     ) -> chex.Array:
         """Read a value from a six-entry, pair-shared difficulty table."""
         values = jnp.asarray(table, dtype=dtype)
@@ -530,13 +515,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _bomb_visible_repeat_window(
-        self, state: DemonAttackState
+            self, state: DemonAttackState
     ) -> Tuple[chex.Array, chex.Array]:
         bomb_type = self._bomb_type_for_wave(state.wave_pattern)
         return _bomb_visible_repeat_window(state, self.consts, bomb_type)
 
     def _bomb_collision_y_bounds(
-        self, state: DemonAttackState
+            self, state: DemonAttackState
     ) -> Tuple[chex.Array, chex.Array]:
         """Return top and bottom y bounds for the currently visible enemy shots."""
         visible_repeats, repeat_offset = self._bomb_visible_repeat_window(state)
@@ -545,12 +530,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return bomb_top, bomb_bottom
 
     def _bomb_burst_length_for_type(
-        self, bomb_type: chex.Array, random_burst_length: chex.Array
+            self, bomb_type: chex.Array, random_burst_length: chex.Array
     ) -> chex.Array:
         return jnp.where(bomb_type == BOMB_TYPE_LONG, 2, random_burst_length)
 
     def _bomb_jitter_for_type(
-        self, bomb_type: chex.Array, standard_jitter_x: chex.Array
+            self, bomb_type: chex.Array, standard_jitter_x: chex.Array
     ) -> chex.Array:
         return jnp.where(bomb_type == BOMB_TYPE_LONG, 0, standard_jitter_x)
 
@@ -781,11 +766,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return jnp.array(self.consts.MAX_DEMONS - 1, dtype=jnp.int32)
 
     def _track_demon(
-        self,
-        state: DemonAttackState,
-        demons_x: chex.Array,
-        can_track: chex.Array,
-        demon_moving_right: chex.Array,
+            self,
+            state: DemonAttackState,
+            demons_x: chex.Array,
+            can_track: chex.Array,
+            demon_moving_right: chex.Array,
     ) -> chex.Array:
         """
         Keep the lowest demon slot beside the player. Inside the border it keeps
@@ -883,7 +868,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_and(
                 jnp.any(state.bomb_active),
                 source_bomb_y - source_bomb_spawn_y < (
-                    self.consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1
+                        self.consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1
                 ) * self.consts.BOMB_SIZE[0],
             ),
         )
@@ -1177,9 +1162,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         source_ready = ready_demons[source_idx]
         base_x = (
-            state.demons_x[source_idx]
-            + self.consts.DEMON_SIZE[1] // 2
-            - self.consts.BOMB_SIZE[1] // 2
+                state.demons_x[source_idx]
+                + self.consts.DEMON_SIZE[1] // 2
+                - self.consts.BOMB_SIZE[1] // 2
         )
 
         burst_length_idx = jax.random.randint(
@@ -1238,8 +1223,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.WIDTH - self.consts.BOUNDARY - self.consts.BOMB_SIZE[1],
         )
         fired_y = (
-            state.demons_y[source_idx]
-            + self.consts.DEMON_SIZE[0]
+                state.demons_y[source_idx]
+                + self.consts.DEMON_SIZE[0]
         )
 
         should_activate_slot = jnp.logical_and(
@@ -1359,9 +1344,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demons_alive,
                 jnp.logical_not(demons_alive),
             )
-        ) # boolean if at least one demon was killed
+        )  # boolean if at least one demon was killed
 
-        killed = state.demons_alive & ~demons_alive # which demon was killed
+        killed = state.demons_alive & ~demons_alive  # which demon was killed
 
         # Bomb vs Player
         bomb_width, _ = self._bomb_observation_size(state)
@@ -1446,7 +1431,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return self._advance_wave_if_complete(state)
 
     def _advance_wave_if_complete(
-        self, state: DemonAttackState
+            self, state: DemonAttackState
     ) -> DemonAttackState:
         """Advance once every scheduled demon has appeared and been destroyed."""
         wave_finished = jnp.logical_and(
@@ -1565,6 +1550,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(state.player_exploding),
         )
 
+
 class DemonAttackRenderer(JAXGameRenderer):
     def __init__(self, consts: DemonAttackConstants = None, config: render_utils.RendererConfig = None):
         super().__init__(consts)
@@ -1595,8 +1581,8 @@ class DemonAttackRenderer(JAXGameRenderer):
             f"demon_{demon_id}" for demon_id in available_demon_ids
         )
         if (
-            min(self.consts.WAVE_DEMON_TABLE) < 0
-            or max(self.consts.WAVE_DEMON_TABLE) >= len(self._demon_sprite_names)
+                min(self.consts.WAVE_DEMON_TABLE) < 0
+                or max(self.consts.WAVE_DEMON_TABLE) >= len(self._demon_sprite_names)
         ):
             raise ValueError(
                 "WAVE_DEMON_TABLE uses zero-based indices into the available "
@@ -1607,15 +1593,9 @@ class DemonAttackRenderer(JAXGameRenderer):
             dtype=jnp.int32,
         )
 
-        # 2. Create procedural assets
-        digit_sprites = _create_digit_sprites(self.consts)
-
-        # Update asset config with procedural data
-        final_asset_config.append({'name': 'score_digits', 'type': 'procedural', 'data': digit_sprites})
-
         # 3. Bake assets
         sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "demonattack")
-        jax.debug.print(f"Using sprites from: {sprite_path}")
+
         (
             self.PALETTE,
             self.SHAPE_MASKS,
@@ -1678,20 +1658,20 @@ class DemonAttackRenderer(JAXGameRenderer):
         death_masks = self.SHAPE_MASKS["player_death_animation"]
         death_frame = jnp.clip(
             (
-                (self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer)
-                * death_masks.shape[0]
+                    (self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer)
+                    * death_masks.shape[0]
             )
             // self.consts.PLAYER_DEATH_ANIMATION_DURATION,
             0,
             death_masks.shape[0] - 1,
         )
         death_x = state.player_x + (
-            self.consts.PLAYER_SIZE[1] - death_masks.shape[2]
+                self.consts.PLAYER_SIZE[1] - death_masks.shape[2]
         ) // 2
         death_y = (
-            self.consts.PLAYER_Y
-            + self.consts.PLAYER_SIZE[0]
-            - death_masks.shape[1]
+                self.consts.PLAYER_Y
+                + self.consts.PLAYER_SIZE[0]
+                - death_masks.shape[1]
         )
         raster = jax.lax.cond(
             state.player_exploding,
@@ -1743,8 +1723,8 @@ class DemonAttackRenderer(JAXGameRenderer):
         def render_bomb(i, r):
             def render_bomb_repeat(j, rr):
                 render_y = (
-                    state.bomb_y[i]
-                    + (j - bomb_repeat_offsets[i]) * self.consts.BOMB_SIZE[0]
+                        state.bomb_y[i]
+                        + (j - bomb_repeat_offsets[i]) * self.consts.BOMB_SIZE[0]
                 )
                 return jax.lax.cond(
                     jnp.logical_and(
@@ -1800,7 +1780,7 @@ class DemonAttackRenderer(JAXGameRenderer):
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
         death_elapsed = (
-            self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer
+                self.consts.PLAYER_DEATH_ANIMATION_DURATION - state.explosion_timer
         )
         flash_frames_left = jnp.clip(
             self.consts.PLAYER_DEATH_FLASH_DURATION - death_elapsed,
@@ -1808,8 +1788,8 @@ class DemonAttackRenderer(JAXGameRenderer):
             self.consts.PLAYER_DEATH_FLASH_DURATION,
         )
         flash_intensity = (
-            jnp.array(255, dtype=jnp.int32) * flash_frames_left
-        ) // self.consts.PLAYER_DEATH_FLASH_DURATION
+                                  jnp.array(255, dtype=jnp.int32) * flash_frames_left
+                          ) // self.consts.PLAYER_DEATH_FLASH_DURATION
         flash_color = jnp.asarray(flash_intensity, dtype=jnp.uint8)
         return jnp.where(
             jnp.logical_and(
@@ -1845,8 +1825,8 @@ class DemonAttackRenderer(JAXGameRenderer):
         spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
         ids = jnp.arange(self.consts.MAX_DEMONS)
         spacing = (
-            self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X
-        ) // (self.consts.MAX_DEMONS + 1)
+                          self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X
+                  ) // (self.consts.MAX_DEMONS + 1)
         spawn_target_x = self.consts.DEMON_MIN_X + (ids + 1) * spacing
 
         def render_demon(i, r):
