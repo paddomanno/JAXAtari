@@ -1204,11 +1204,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demons_x,
             demons_x,
         )
-        secondary_can_move = jnp.logical_and(
-            can_move,
-            jnp.logical_and(selected_active, selected_mask),
-        )
-        secondary_split_mask = jnp.logical_and(split_mask, state.demon_split_secondary_alive)
+        secondary_sweep_mask = jnp.logical_and(split_mask, state.demon_split_secondary_alive)
         lowest = ids == self.consts.MAX_DEMONS - 1
         lowest_tracking_mask = jnp.logical_and(
             lowest,
@@ -1226,7 +1222,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
         demon_split_x = state.demon_split_x
-        secondary_sweep_mask = jnp.logical_and(secondary_split_mask, secondary_can_move)
         secondary_sweep_x, demon_split_moving_right = self._sweep_x(
             demon_split_x,
             demon_split_moving_right,
