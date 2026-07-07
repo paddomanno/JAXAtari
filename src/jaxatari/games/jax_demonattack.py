@@ -459,7 +459,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
-        wave_number = jnp.maximum(wave_number, 8)
+        wave_number = jnp.maximum(wave_number, 0)
         repeating_pattern_count = (
             INITIAL_WAVE_PATTERNS - REPEATING_WAVE_PATTERN_START
         )
