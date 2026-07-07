@@ -1254,7 +1254,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
         )
         player_center_x = state.player_x + self.consts.PLAYER_SIZE[1] // 2
-        demon_width, _ = self._demon_width_size(demon_status)
+        demon_width = self._demon_width_size(demon_status)
         demons_x = self._track_x_toward_player(
             demons_x,
             demon_width,
@@ -1573,7 +1573,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         def check_demon_collision(i, carry):
             """
             The carry contains the current demon status, score, and laser-active
-            flag. A first hit on later-wave demons splits them into the ROM's
+            flag. A demon can only be hit after its spawn animation has ended,
+            and a successful hit clears that demon, adds score, and consumes the
+            laser so later demon slots in this loop cannot also be hit.
+            A first hit on later-wave demons splits them into the
             small-demon form; a hit on that small demon clears the slot.
             """
             s_status, s_primary_alive, s_secondary_alive, s_score, l_active = carry
@@ -1658,16 +1661,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 jnp.where(secondary_hit, False, s_secondary_alive[i]),
             )
             small_still_alive = jnp.logical_or(new_primary_alive_value, new_secondary_alive_value)
+            # Normal demons are removed when hit unless this hit created a split
+            status_after_normal_hit = jnp.where(normal_hit, DEMON_STATUS_FREE, s_status[i])
+            # Split demons keep the slot alive until both halves are destroyed.
+            status_after_small_hit = jnp.where(small_still_alive, DEMON_STATUS_SMALL, DEMON_STATUS_FREE,)
+            status_after_hit = jnp.where(
+                jnp.logical_and(is_small, demon_hit),
+                status_after_small_hit,
+                status_after_normal_hit,
+            )
+            # Later-wave normal demons become split demons on their first hit.
             new_status = s_status.at[i].set(
-                jnp.where(
-                    split_demon,
-                    DEMON_STATUS_SMALL,
-                    jnp.where(
-                        jnp.logical_and(is_small, demon_hit),
-                        jnp.where(small_still_alive, DEMON_STATUS_SMALL, DEMON_STATUS_FREE),
-                        jnp.where(normal_hit, DEMON_STATUS_FREE, s_status[i]),
-                    ),
-                )
+                jnp.where(split_demon, DEMON_STATUS_SMALL, status_after_hit)
             )
             new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
             new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
