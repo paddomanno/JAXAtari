@@ -623,33 +623,34 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _is_small_demon_status(status: chex.Array) -> chex.Array:
         return status == DEMON_STATUS_SMALL
 
-    def _split_part_active(self, status, primary_alive, secondary_alive):
+    def _split_part_active(
+        self,
+        status: chex.Array,
+        primary_alive: chex.Array,
+        secondary_alive: chex.Array,
+    ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Returns two boolean masks whether the upper and lower small-demon parts are currently active.
+        Normal demons return False.
+        """
         is_small = self._is_small_demon_status(status)
         return (
             jnp.logical_and(is_small, primary_alive),
             jnp.logical_and(is_small, secondary_alive),
         )
 
-    def _demon_width_for_status(self, status: chex.Array) -> chex.Array:
+    def _demon_width_size(self, status: chex.Array) -> chex.Array:
         return jnp.where(
             self._is_small_demon_status(status),
             self.consts.SMALL_DEMON_SIZE[1],
             self.consts.DEMON_SIZE[1],
         )
 
-    def _demon_height_for_status(self, status: chex.Array) -> chex.Array:
+    def _demon_height_size(self, status: chex.Array) -> chex.Array:
         return jnp.where(
             self._is_small_demon_status(status),
             self.consts.SMALL_DEMON_SIZE[0],
             self.consts.DEMON_SIZE[0],
-        )
-
-    def _split_active_masks(self, state: DemonAttackState) -> Tuple[chex.Array, chex.Array]:
-        """Return alive masks for the two independently hittable small demons."""
-        return self._split_part_active(
-            state.demon_status,
-            state.demon_split_primary_alive,
-            state.demon_split_secondary_alive,
         )
 
     def _track_x_toward_player(
@@ -700,11 +701,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         laser_right: chex.Array,
         laser_bottom: chex.Array,
     ) -> chex.Array:
-        return (
-            jnp.logical_and(
-                jnp.logical_and(laser_right > rect_x, state.laser_x < rect_x + rect_width),
-                jnp.logical_and(state.laser_y < rect_y + rect_height, laser_bottom > rect_y),
-            )
+        return jnp.logical_and(
+            jnp.logical_and(laser_right > rect_x, state.laser_x < rect_x + rect_width),
+            jnp.logical_and(state.laser_y < rect_y + rect_height, laser_bottom > rect_y),
         )
 
     def _demon_observation_bounds(
@@ -717,7 +716,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         logical demon slot, so the observation reports the smallest rectangle
         covering whichever split parts are still alive.
         """
-        split_primary_active, split_secondary_active = self._split_active_masks(state)
+        split_primary_active, split_secondary_active = self._split_part_active(
+            state.demon_status,
+            state.demon_split_primary_alive,
+            state.demon_split_secondary_alive,
+        )
         both_split_parts_active = jnp.logical_and(split_primary_active, split_secondary_active)
         split_left = jnp.where(
             both_split_parts_active,
@@ -1251,9 +1254,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
         )
         player_center_x = state.player_x + self.consts.PLAYER_SIZE[1] // 2
+        demon_width, _ = self._demon_width_size(demon_status)
         demons_x = self._track_x_toward_player(
             demons_x,
-            self._demon_width_for_status(demon_status),
+            demon_width,
             lowest_tracking_mask,
             player_center_x,
         )
@@ -1447,7 +1451,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         source_ready = ready_demons[source_idx]
         source_y = state.demons_y[source_idx]
-        source_height = self._demon_height_for_status(state.demon_status[source_idx])
+        source_height = self._demon_height_size(state.demon_status[source_idx])
         base_x = _calc_burst_base_x(source_idx, state)
 
         burst_length_idx = jax.random.randint(
@@ -1581,8 +1585,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 s_secondary_alive[i],
             )
 
-            demon_width = self._demon_width_for_status(s_status[i])
-            demon_height = self._demon_height_for_status(s_status[i])
+            demon_width = self._demon_width_size(s_status[i])
+            demon_height = self._demon_height_size(s_status[i])
             split_demon_y = state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
 
             primary_overlap = self._laser_overlaps_rect(
