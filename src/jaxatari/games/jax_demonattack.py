@@ -294,11 +294,11 @@ class DemonAttackConstants(AutoDerivedConstants):
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
-    DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=20)  # frames per V segment
-    DIVE_X_SPEED_FRAC: int = struct.field(pytree_node=False, default=200)
-    DIVE_Y_SPEED_UP_FRAC: int = struct.field(pytree_node=False, default=-200)
-    DIVE_Y_SPEED_DOWN_FRAC: int = struct.field(pytree_node=False, default=400)
-    DIVE_BASELINE_STEP_DOWN: int = struct.field(pytree_node=False, default=400) # amount of pixels the y-baseline is lowered per segment
+    DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
+    DIVE_WAVE_UP_DURATION: int = struct.field(pytree_node=False, default=20) # how many frames of the segment are for the upward motion (the rest is downward)
+    DIVE_WAVE_AMPLITUDE_PIXELS: int = struct.field(pytree_node=False, default=18)
+    DIVE_X_SPEED_FRAC: int = struct.field(pytree_node=False, default=160) # # accumulator change. 255 = 1 pixel/frame net horizontal movement
+    DIVE_NET_DOWN_SPEED_FRAC: int = struct.field(pytree_node=False, default=80) # accumulator change. 255 = 1 pixel/frame net downward movement
     DIVE_DESPAWN_Y: int = struct.field(pytree_node=False, default=170)  # "slightly above the ground"
 
     # Coordinates & Sizes. Sizes are (height, width).
@@ -385,7 +385,6 @@ class DemonAttackState(struct.PyTreeNode):
     demon_death_anim_timer: chex.Array
     demon_dive_segment_step: chex.Array  # int32, frames elapsed in the current V-segment
     demon_dive_x_dir: chex.Array  # bool, moving right during current segment
-    demon_dive_baseline_y: chex.Array  # int32, the "floor" of the current V, drifts down each segment
 
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -503,7 +502,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_mode=zeros,
             demon_dive_segment_step=zeros,
             demon_dive_x_dir=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_dive_baseline_y=zeros
         )
 
     def _next_demon_random(self, random: chex.Array) -> chex.Array:
@@ -904,8 +902,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         The movement is made up of V-shaped horizontal segments.
         The movement direction per segment is fixed, so overshoot past the player is
         expected. Re-targets toward the player's current x only at the end of a segment.
-        The overall downward trend is realized by the y_baseline, The wave segments
-        are added on top of that baseline.
+        The overall downward trend is realized by the net down speed, The wave segments
+        are added on top of that base trajectory.
         Despawns a diving demon once it reaches DIVE_DESPAWN_Y, freeing its slot for the
         existing teleport/respawn mechanism.
         active_mask: a bitmask that defines which demons are supposed to dive
@@ -916,10 +914,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # Constants - must be defined in self.consts
         SEGMENT_DURATION = self.consts.DIVE_SEGMENT_DURATION
         X_SPEED_FRAC = self.consts.DIVE_X_SPEED_FRAC
-        Y_SPEED_UP_FRAC = self.consts.DIVE_Y_SPEED_UP_FRAC
-        Y_SPEED_DOWN_FRAC = self.consts.DIVE_Y_SPEED_DOWN_FRAC
-        BASELINE_STEP_DOWN = self.consts.DIVE_BASELINE_STEP_DOWN
+        NET_DOWN_SPEED_FRAC = self.consts.DIVE_NET_DOWN_SPEED_FRAC
+        WAVE_UP_DURATION = self.consts.DIVE_WAVE_UP_DURATION  # frames for upstroke
+        WAVE_AMPLITUDE_PIXELS = self.consts.DIVE_WAVE_AMPLITUDE_PIXELS  # pixels
         DESPAWN_Y = self.consts.DIVE_DESPAWN_Y
+
+        # Derived constants
+        WAVE_DOWN_DURATION = SEGMENT_DURATION - WAVE_UP_DURATION
+
+        # Wave speeds: move up by WAVE_AMPLITUDE_PIXELS during upstroke,
+        # then down by WAVE_AMPLITUDE_PIXELS during downstroke (net wave movement = 0)
+        WAVE_UP_SPEED = -WAVE_AMPLITUDE_PIXELS * 256 // WAVE_UP_DURATION
+        WAVE_DOWN_SPEED = WAVE_AMPLITUDE_PIXELS * 256 // WAVE_DOWN_DURATION
 
         # Current state
         demons_x = state.demons_x
@@ -927,86 +933,57 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_x_motion_accumulator = state.demon_x_motion_accumulator
         demon_y_motion_accumulator = state.demon_y_motion_accumulator
         demon_dive_x_dir = state.demon_dive_x_dir
-        demon_dive_baseline_y = state.demon_dive_baseline_y
         demon_dive_segment_step = state.demon_dive_segment_step
         demon_status = state.demon_status
         demon_mode = state.demon_mode
 
-        # Pass-through state (not used in dive but returned for consistency)
+        # Pass-through state
         demon_moving_right = state.demon_moving_right
         demon_moving_down = state.demon_moving_down
         demon_phase = state.demon_phase
 
-        # Segment midpoint
-        segment_midpoint = SEGMENT_DURATION // 2
+        # Determine wave phase
+        is_up_stroke = demon_dive_segment_step < WAVE_UP_DURATION
 
-        # Determine if we're in ascending or descending part of the V
-        is_ascending = demon_dive_segment_step < segment_midpoint
-
-        # X speed: positive magnitude, direction from dive_x_dir
+        # X speed: direction from dive_x_dir
         x_speed = jnp.where(demon_dive_x_dir, X_SPEED_FRAC, -X_SPEED_FRAC)
 
-        # Y speed: negative for ascending (up), positive for descending (down)
-        y_speed = jnp.where(
-            is_ascending,
-            Y_SPEED_UP_FRAC,
-            Y_SPEED_DOWN_FRAC
+        # Y speed: net down + wave component
+        y_speed = NET_DOWN_SPEED_FRAC + jnp.where(
+            is_up_stroke,
+            WAVE_UP_SPEED,
+            WAVE_DOWN_SPEED
         )
 
         # Update motion sums
         x_motion_sum = demon_x_motion_accumulator + x_speed
         y_motion_sum = demon_y_motion_accumulator + y_speed
 
-        # Check for movement (both overflow and underflow)
-        x_move_right = stepping & (x_motion_sum >= 256)
-        x_move_left = stepping & (x_motion_sum < 0)
-        y_move_up = stepping & (y_motion_sum < 0)
-        y_move_down = stepping & (y_motion_sum >= 256)
+        # Calculate pixels to move (supports >255 speeds)
+        x_pixels = x_motion_sum // 256
+        y_pixels = y_motion_sum // 256
 
         # Apply movement
-        demons_x = jnp.where(x_move_right, demons_x + 1, demons_x)
-        demons_x = jnp.where(x_move_left, demons_x - 1, demons_x)
-        demons_y = jnp.where(y_move_down, demons_y + 1, demons_y)
-        demons_y = jnp.where(y_move_up, demons_y - 1, demons_y)
+        demons_x = jnp.where(stepping, demons_x + x_pixels, demons_x)
+        demons_y = jnp.where(stepping, demons_y + y_pixels, demons_y)
 
-        # Update accumulators (handle overflow/underflow)
-        new_x_accum = jnp.where(
-            x_move_right,
-            x_motion_sum - 256,
-            jnp.where(x_move_left, x_motion_sum + 256, x_motion_sum)
-        ) & 255
-
-        new_y_accum = jnp.where(
-            y_move_down,
-            y_motion_sum - 256,
-            jnp.where(y_move_up, y_motion_sum + 256, y_motion_sum)
-        ) & 255
-
-        demon_x_motion_accumulator = jnp.where(stepping, new_x_accum, demon_x_motion_accumulator)
-        demon_y_motion_accumulator = jnp.where(stepping, new_y_accum, demon_y_motion_accumulator)
+        # Update accumulators (modulo 256)
+        demon_x_motion_accumulator = jnp.where(
+            stepping, x_motion_sum % 256, demon_x_motion_accumulator)
+        demon_y_motion_accumulator = jnp.where(
+            stepping, y_motion_sum % 256, demon_y_motion_accumulator)
 
         # Increment segment step
         demon_dive_segment_step = jnp.where(
-            stepping,
-            demon_dive_segment_step + 1,
-            demon_dive_segment_step
-        )
+            stepping, demon_dive_segment_step + 1, demon_dive_segment_step)
 
         # Check for segment end
         segment_end = stepping & (demon_dive_segment_step >= SEGMENT_DURATION)
 
-        # At segment end: reset step, possibly flip x_dir, lower baseline
+        # At segment end: reset step, flip x_dir if overshot
         player_x = state.player_x
-        overshot = (
-                (demon_dive_x_dir & (demons_x > player_x)) |
-                (~demon_dive_x_dir & (demons_x < player_x))
-        )
+        overshot = (demon_dive_x_dir & (demons_x > player_x)) | (~demon_dive_x_dir & (demons_x < player_x))
         demon_dive_x_dir = jnp.where(segment_end & overshot, ~demon_dive_x_dir, demon_dive_x_dir)
-        demon_dive_baseline_y = jnp.where(
-            segment_end,
-            demon_dive_baseline_y - BASELINE_STEP_DOWN,
-            demon_dive_baseline_y
-        )
         demon_dive_segment_step = jnp.where(segment_end, 0, demon_dive_segment_step)
 
         # Despawn check
@@ -1017,7 +994,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         # Reset dive state for despawned demons
         demon_dive_segment_step = jnp.where(despawn, 0, demon_dive_segment_step)
         demon_dive_x_dir = jnp.where(despawn, True, demon_dive_x_dir)
-        demon_dive_baseline_y = jnp.where(despawn, 0, demon_dive_baseline_y)
 
         return {
             "demons_x": demons_x,
@@ -1028,7 +1004,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             "demon_x_motion_accumulator": demon_x_motion_accumulator,
             "demon_y_motion_accumulator": demon_y_motion_accumulator,
             "demon_dive_x_dir": demon_dive_x_dir,
-            "demon_dive_baseline_y": demon_dive_baseline_y,
             "demon_dive_segment_step": demon_dive_segment_step,
             "demon_status": demon_status,
             "demon_mode": demon_mode,
@@ -1248,7 +1223,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         state = state.replace(
             demon_mode=jnp.where(dive_start, BEHAVIOR_DIVE, state.demon_mode),
             demon_dive_segment_step=jnp.where(dive_start, 0, state.demon_dive_segment_step),
-            demon_dive_baseline_y=jnp.where(dive_start, state.demons_y, state.demon_dive_baseline_y),
             demon_dive_x_dir=jnp.where(
                 dive_start, state.demons_x < state.player_x, state.demon_dive_x_dir
             ),
@@ -1266,7 +1240,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_x_motion_accumulator = jnp.where(is_diving, dive["demon_x_motion_accumulator"], demon_x_motion_accumulator)
         demon_y_motion_accumulator = jnp.where(is_diving, dive["demon_y_motion_accumulator"], demon_y_motion_accumulator)
         demon_dive_x_dir = dive["demon_dive_x_dir"]
-        demon_dive_baseline_y = dive["demon_dive_baseline_y"]
         demon_dive_segment_step = dive["demon_dive_segment_step"]
         demon_status = jnp.where(is_diving, dive["demon_status"], demon_status)
         demon_mode = dive["demon_mode"]
@@ -1309,7 +1282,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.spawn_pause_timer,
             ),
             demon_dive_x_dir=demon_dive_x_dir,
-            demon_dive_baseline_y=demon_dive_baseline_y,
             demon_dive_segment_step=demon_dive_segment_step,
         )
         return self._sync_demon_status(state)
