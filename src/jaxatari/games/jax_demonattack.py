@@ -197,6 +197,11 @@ def _get_default_asset_config() -> tuple:
             'EnemyDeathAnimation/EnemyPart_1.npy',
             'EnemyDeathAnimation/EnemyPart_2.npy',
         ]},
+        {'name': 'enemy_death_animation_small', 'type': 'group', 'files': [
+            'EnemyDeathAnimationSmall/EnemyPart_0.npy',
+            'EnemyDeathAnimationSmall/EnemyPart_1.npy',
+            'EnemyDeathAnimationSmall/EnemyPart_2.npy',
+        ]},
         {'name': 'player_death_animation', 'type': 'group', 'files': [
             'PlayerDeathAnimation/Explode_1.npy',
             'PlayerDeathAnimation/Explode_2.npy',
