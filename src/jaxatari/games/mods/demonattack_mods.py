@@ -8,6 +8,7 @@ from jaxatari.games.mods.demonattack.demonattack_mod_plugins import (
     InfiniteLivesMod,
     RelentlessWavesMod,
     LateWaveStartMod,
+    PlayerGuidedLaserMod,
 )
 
 
@@ -25,6 +26,7 @@ class DemonAttackEnvMod(JaxAtariModController):
         "infinite_lives": InfiniteLivesMod,
         "relentless_waves": RelentlessWavesMod,
         "late_wave_start": LateWaveStartMod,
+        "player_guided_laser": PlayerGuidedLaserMod,
     }
 
     def __init__(

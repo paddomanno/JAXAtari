@@ -105,3 +105,14 @@ class LateWaveStartMod(JaxAtariPostStepModPlugin):
             jnp.array(self._env.consts.TRACKING_PROJECTILES_START_WAVE, dtype=jnp.int32),
         )
         return self._env._get_observation(state), state
+
+
+class PlayerGuidedLaserMod(JaxAtariPostStepModPlugin):
+    """Lets the player steer an active laser horizontally after firing."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
+        guided_x = new_state.player_x + self._env.consts.PLAYER_SIZE[1] // 2
+        return new_state.replace(
+            laser_x=jnp.where(new_state.laser_active, guided_x, new_state.laser_x),
+        )
