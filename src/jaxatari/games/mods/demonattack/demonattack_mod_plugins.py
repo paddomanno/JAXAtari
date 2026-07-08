@@ -116,3 +116,95 @@ class PlayerGuidedLaserMod(JaxAtariPostStepModPlugin):
         return new_state.replace(
             laser_x=jnp.where(new_state.laser_active, guided_x, new_state.laser_x),
         )
+
+
+class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
+    """Blinks one active demon in place and teleport."""
+
+    BLINK_FRAMES = 28
+    TELEPORT_INTERVAL = 192
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
+        ids = jnp.arange(self._env.consts.MAX_DEMONS, dtype=jnp.int32)
+        warning_active = new_state.spawn_pause_timer > self._env.consts.SPAWN_MOVE_PAUSE
+        finish_warning = jnp.logical_and(
+            prev_state.spawn_pause_timer > self._env.consts.SPAWN_MOVE_PAUSE,
+            new_state.spawn_pause_timer <= self._env.consts.SPAWN_MOVE_PAUSE,
+        )
+        teleport_busy = jnp.logical_or(
+            jnp.any(warning_active),
+            jnp.any(prev_state.spawn_pause_timer > self._env.consts.SPAWN_MOVE_PAUSE),
+        )
+        eligible = jnp.logical_and(
+            new_state.demons_alive,
+            new_state.spawn_anim_timer <= 0,
+        )
+        eligible = jnp.logical_and(
+            eligible,
+            new_state.spawn_pause_timer <= 0,
+        )
+        #eligible = jnp.logical_and(
+        #    eligible,
+        #    new_state.demon_status != DEMON_STATUS_SMALL,
+        #)
+        # TODO when split/small demon PR merged, uncomment this
+        eligible = jnp.logical_and(eligible, jnp.logical_not(teleport_busy))
+        due = jnp.mod(new_state.step_counter, self.TELEPORT_INTERVAL) == 0
+        desired_slot = jnp.mod(
+            new_state.step_counter // self.TELEPORT_INTERVAL + new_state.wave_number,
+            self._env.consts.MAX_DEMONS,
+        )
+        candidate_order = jnp.mod(desired_slot + ids, self._env.consts.MAX_DEMONS)
+        ordered_eligible = eligible[candidate_order]
+        first_ordered_idx = jnp.argmax(ordered_eligible.astype(jnp.int32))
+        selected_slot = candidate_order[first_ordered_idx]
+        has_target = jnp.any(eligible)
+        start_warning = jnp.logical_and(
+            due,
+            jnp.logical_and(has_target, ids == selected_slot),
+        )
+        teleport = finish_warning
+        x_span = (
+            self._env.consts.DEMON_MAX_X
+            - self._env.consts.DEMON_MIN_X
+            - self._env.consts.DEMON_SIZE[1]
+        )
+        min_gap = self._env.consts.DEMON_MIN_VERTICAL_DISTANCE
+        lane_min_y = jnp.asarray((
+            self._env.consts.DEMON_MIN_Y,
+            new_state.demons_y[0] + min_gap,
+            new_state.demons_y[1] + min_gap,
+        ), dtype=jnp.int32)
+        lane_max_y = jnp.asarray((
+            new_state.demons_y[1] - min_gap,
+            new_state.demons_y[2] - min_gap,
+            self._env.consts.DEMON_MAX_Y,
+        ), dtype=jnp.int32)
+        lane_center_y = jnp.asarray((
+            (self._env.consts.DEMON_MIN_Y + new_state.demons_y[1]) // 2,
+            (new_state.demons_y[0] + new_state.demons_y[2]) // 2,
+            (new_state.demons_y[1] + self._env.consts.DEMON_MAX_Y) // 2,
+        ), dtype=jnp.int32)
+        seed = new_state.step_counter + new_state.wave_number * 13 + ids * 29
+        target_x = self._env.consts.DEMON_MIN_X + jnp.mod(seed * 11, x_span)
+        target_y = jnp.clip(
+            lane_center_y + jnp.mod(seed * 7, 5) - 2,
+            lane_min_y,
+            lane_max_y,
+        )
+        return new_state.replace(
+            demons_x=jnp.where(teleport, target_x, new_state.demons_x),
+            demons_y=jnp.where(teleport, target_y, new_state.demons_y),
+            spawn_pause_timer=jnp.where(
+                start_warning,
+                self._env.consts.SPAWN_MOVE_PAUSE + self.BLINK_FRAMES,
+                jnp.where(teleport, 0, new_state.spawn_pause_timer),
+            ),
+            demon_moving_right=jnp.where(
+                teleport,
+                target_x < new_state.player_x,
+                new_state.demon_moving_right,
+            ),
+            demon_moving_down=jnp.where(teleport, True, new_state.demon_moving_down),
+        )

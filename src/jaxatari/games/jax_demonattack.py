@@ -246,6 +246,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=18)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
     DEMON_TELEPORT_DURATION: int = struct.field(pytree_node=False, default=44)
+    DEMON_TELEPORT_BLINK_FRAME_DURATION: int = struct.field(pytree_node=False, default=4)
     DEMON_VERTICAL_MOTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(64, 128, 192, 240, 240, 192, 128, 64),
@@ -1945,11 +1946,20 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
             def render_normal():
-                return self.jr.render_at_clipped(
-                    r,
-                    state.demons_x[i],
-                    state.demons_y[i],
-                    demon_mask,
+                blink_phase = state.spawn_pause_timer[i] // self.consts.DEMON_TELEPORT_BLINK_FRAME_DURATION & 1
+                blink_visible = (
+                    (state.spawn_pause_timer[i] <= self.consts.SPAWN_MOVE_PAUSE)
+                    | (blink_phase == 0)
+                )
+                return jax.lax.cond(
+                    blink_visible,
+                    lambda: self.jr.render_at_clipped(
+                        r,
+                        state.demons_x[i],
+                        state.demons_y[i],
+                        demon_mask,
+                    ),
+                    lambda: r,
                 )
 
             def render_death():
