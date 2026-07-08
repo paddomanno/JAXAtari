@@ -79,3 +79,29 @@ class InfiniteLivesMod(JaxAtariPostStepModPlugin):
             game_over=jnp.array(False, dtype=jnp.bool_),
         )
         return self._env._get_observation(state), state
+
+
+class RelentlessWavesMod(JaxAtariInternalModPlugin):
+    """Increases pressure with quicker respawns and more frequent full bursts."""
+
+    constants_overrides = {
+        "RESPAWN_DELAY": 10,
+        "SPAWN_MOVE_PAUSE": 4,
+        "WAVE_TOTAL_DEMONS": 12,
+        "ENEMY_SHOT_ACTION_TABLE": (4, 4, 3, 3, 3, 2, 3, 2, 3, 2, 3, 2),
+        "BOMB_PRE_FIRE_PAUSE": 8,
+        "BOMB_BURST_LENGTH_OPTIONS": (5, 7, 7, 7),
+        "BOMB_JITTER_X_TABLE": (-1, 0, 1, 0, -1, 0, 1),
+    }
+
+
+class LateWaveStartMod(JaxAtariPostStepModPlugin):
+    """Starts each reset on wave 8 so tracking projectiles and late sprites are active."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state: DemonAttackState):
+        state = self._env._initialize_wave_state(
+            state,
+            jnp.array(self._env.consts.TRACKING_PROJECTILES_START_WAVE, dtype=jnp.int32),
+        )
+        return self._env._get_observation(state), state
