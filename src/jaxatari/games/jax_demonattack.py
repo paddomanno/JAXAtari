@@ -298,6 +298,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
+    SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     # Coordinates & Sizes. Sizes are (height, width).
@@ -769,7 +770,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _can_split_demons(self, wave_pattern: chex.Array) -> chex.Array:
         """Waves 5-12 use the separate small-demons after a hit."""
-        return wave_pattern >= 4
+        return wave_pattern >= self.consts.SPLIT_DEMONS_START_WAVE
 
     def _initialize_wave_state(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
         """Replace the previous wave state with a new initialized wave."""
