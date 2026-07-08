@@ -663,25 +663,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self.consts.DEMON_SIZE[0],
         )
 
-    def _track_x_toward_player(
-        self,
-        x: chex.Array,
-        width: chex.Array,
-        mask: chex.Array,
-        player_center_x: chex.Array,
-    ) -> chex.Array:
-        """Move masked x positions one pixel toward the player's center."""
-        center_x = x + width // 2
-        return jnp.where(
-            mask,
-            jnp.clip(
-                x + jnp.sign(player_center_x - center_x).astype(jnp.int32),
-                self.consts.DEMON_MIN_X,
-                self.consts.DEMON_MAX_X,
-            ),
-            x,
-        )
-
     def _sweep_x(
         self,
         x: chex.Array,
@@ -964,19 +945,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         self,
         state: DemonAttackState,
         demons_x: chex.Array,
+        demon_width: chex.Array,
         can_track: chex.Array,
         demon_moving_right: chex.Array,
     ) -> chex.Array:
         """
-        Keep the lowest demon slot beside the player. Inside the border it keeps
-        its own movement; outside it returns to the nearest border.
+        Keep a demon beside the player. Inside the border it keeps its own
+        movement; outside it returns to the nearest border.
         """
         player_left = state.player_x
         player_right = state.player_x + self.consts.PLAYER_SIZE[1]
         player_center = player_left + self.consts.PLAYER_SIZE[1] // 2
         demon_left = demons_x
-        demon_right = demons_x + self.consts.DEMON_SIZE[1]
-        demon_center = demon_left + self.consts.DEMON_SIZE[1] // 2
+        demon_right = demons_x + demon_width
+        demon_center = demon_left + demon_width // 2
         camps_left = demon_center < player_center
         edge_gap = jnp.where(
             camps_left,
@@ -991,7 +973,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         target_x = jnp.where(
             camps_left,
-            state.player_x - self.consts.DEMON_SIZE[1] - self.consts.DEMON_TRACK_OFFSET,
+            state.player_x - demon_width - self.consts.DEMON_TRACK_OFFSET,
             state.player_x + self.consts.PLAYER_SIZE[1] + self.consts.DEMON_TRACK_OFFSET,
         )
         tracking_direction = jnp.where(
@@ -1227,6 +1209,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_moving_right = self._track_demon(
             state,
             demons_x,
+            self._demon_width_size(demon_status),
             can_move & selected_active & selected_mask & tracking_demon,
             demon_moving_right,
         )
@@ -1247,20 +1230,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_x,
         )
         lowest = ids == self.consts.MAX_DEMONS - 1
-        lowest_tracking_mask = jnp.logical_and(
-            lowest,
-            jnp.logical_or(
-                jnp.logical_and(slot_move, demon_status == DEMON_STATUS_NORMAL),
-                primary_split_can_track,
-            ),
-        )
-        player_center_x = state.player_x + self.consts.PLAYER_SIZE[1] // 2
-        demon_width = self._demon_width_size(demon_status)
-        demons_x = self._track_x_toward_player(
+        demon_moving_right = self._track_demon(
+            state,
             demons_x,
-            demon_width,
-            lowest_tracking_mask,
-            player_center_x,
+            self._demon_width_size(demon_status),
+            jnp.logical_and(lowest, primary_split_can_track),
+            demon_moving_right,
         )
 
         demon_split_x, demon_split_moving_right = self._sweep_x(
