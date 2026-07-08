@@ -290,6 +290,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
+    DEMON_LEVEL_SHIFT_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, killing a demon shifts the rest of the formation down one height level instead of respawning in place, and the replacement re-enters at the top row
 
     # Coordinates & Sizes. Sizes are (height, width).
     PLAYER_X: int = struct.field(pytree_node=False, default=87)
@@ -509,6 +510,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ) // 2
 
         return jax.lax.switch(demon, (first, second, third)).astype(jnp.int32)
+    def _should_shift_demon_levels(self, wave_number: chex.Array) -> chex.Array:
+        """Whether killing a demon should push the formation down one level.
+
+        In early waves a respawning demon simply reappears at the height its
+        predecessor died at. Starting at DEMON_LEVEL_SHIFT_START_WAVE, the
+        remaining demons instead drop down by one height level and the
+        replacement re-enters at the top row, mirroring the original game's
+        later-wave behavior.
+        """
+        return wave_number >= self.consts.DEMON_LEVEL_SHIFT_START_WAVE
+
+
 
     def _difficulty_value_for_pattern(
         self,
@@ -971,11 +984,45 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # New demons start from the target row for their slot so the formation
         # stays vertically separated as the wave refills.
-        demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
+        # Demons that are part of the initial per-wave fill use the target-row spacing formula;
+        # demons respawning after a kill either reappear at the height they died at, or, once DEMON_LEVEL_SHIFT_START_WAVE is reached, push the
+        # rest of the formation down one height level and re-enter at the top.
+        is_initial_fill = state.wave_spawned_demons < self.consts.MAX_DEMONS
+        should_shift_levels = self._should_shift_demon_levels(state.wave_number)
+
         schedule_mask = ids == scheduled
+
+        initial_fill_y = self._new_demon_y(demons_y, scheduled)
+        shifted_formation_y = jnp.clip(
+            demons_y + self.consts.DEMON_MIN_VERTICAL_DISTANCE,
+            self.consts.DEMON_MIN_Y,
+            self.consts.DEMON_MAX_Y,
+        )
+
+        scheduled_slot_y = jnp.where(
+            is_initial_fill,
+            initial_fill_y,
+            jnp.where(
+                should_shift_levels,
+                jnp.array(self.consts.DEMON_MIN_Y, dtype=jnp.int32),
+                demons_y[scheduled],
+            ),
+        )
+
+        demon_teleport = jnp.where(schedule, scheduled, state.demon_teleport)
         demons_y = jnp.where(
             schedule & schedule_mask,
-            self._new_demon_y(demons_y, scheduled),
+            scheduled_slot_y,
+            demons_y,
+        )
+        # In later waves, killing a demon also pushes every other demon down by
+        # one height level to make room for the newcomer entering at the top.
+        demons_y = jnp.where(
+            schedule
+            & should_shift_levels
+            & jnp.logical_not(is_initial_fill)
+            & jnp.logical_not(schedule_mask),
+            shifted_formation_y,
             demons_y,
         )
         demon_status = jnp.where(
