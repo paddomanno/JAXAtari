@@ -1393,15 +1393,23 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             moved_y < bomb_active_limit,
         )
 
+        def _bomb_source_bounds(_source_idx: chex.Array, _state: DemonAttackState):
+            source_x = _state.demons_x[_source_idx]
+            source_y = _state.demons_y[_source_idx]
+            source_width = self._demon_width_size(_state.demon_status[_source_idx])
+            source_height = self._demon_height_size(_state.demon_status[_source_idx])
+            return source_x, source_y, source_width, source_height
+
         def _calc_burst_base_x(_source_idx: chex.Array, _state: DemonAttackState) -> chex.Array:
             """
             Calculate the center of the demon bomb burst.
             :param _source_idx: Demon to use as reference for where to place the burst
             :return:Array with the same x-position for each bomb
             """
+            source_x, _, source_width, _ = _bomb_source_bounds(_source_idx, _state)
             return (
-                    _state.demons_x[_source_idx]
-                    + self.consts.DEMON_SIZE[1] // 2
+                    source_x
+                    + source_width // 2
                     - self.consts.BOMB_SIZE[1] // 2
             )
 
@@ -1460,8 +1468,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_source_idx,
         )
         source_ready = ready_demons[source_idx]
-        source_y = state.demons_y[source_idx]
-        source_height = self._demon_height_size(state.demon_status[source_idx])
+        _, source_y, _, source_height = _bomb_source_bounds(source_idx, state)
         base_x = _calc_burst_base_x(source_idx, state)
 
         burst_length_idx = jax.random.randint(
