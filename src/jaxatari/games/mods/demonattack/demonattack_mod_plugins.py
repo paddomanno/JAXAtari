@@ -7,6 +7,16 @@ from jaxatari.games.jax_demonattack import DemonAttackState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 
+def _clear_bombs(env, state: DemonAttackState) -> DemonAttackState:
+    return state.replace(
+        bomb_active=jnp.zeros_like(state.bomb_active, dtype=jnp.bool_),
+        bomb_burst_step=jnp.array(env.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+        bomb_burst_length=jnp.array(0, dtype=jnp.int32),
+        bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
+        bomb_action_counter=jnp.array(0, dtype=jnp.int32),
+    )
+
+
 class FastPlayerMod(JaxAtariInternalModPlugin):
     """Moves the player twice as fast."""
 
@@ -44,23 +54,11 @@ class NoEnemyShotsMod(JaxAtariPostStepModPlugin):
 
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
-        return new_state.replace(
-            bomb_active=jnp.zeros_like(new_state.bomb_active, dtype=jnp.bool_),
-            bomb_burst_step=jnp.array(self._env.consts.BOMB_BURST_RATES, dtype=jnp.int32),
-            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
-            bomb_action_counter=jnp.array(0, dtype=jnp.int32),
-        )
+        return _clear_bombs(self._env, new_state)
 
     @partial(jax.jit, static_argnums=(0,))
     def after_reset(self, obs, state: DemonAttackState):
-        state = state.replace(
-            bomb_active=jnp.zeros_like(state.bomb_active, dtype=jnp.bool_),
-            bomb_burst_step=jnp.array(self._env.consts.BOMB_BURST_RATES, dtype=jnp.int32),
-            bomb_burst_length=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
-            bomb_action_counter=jnp.array(0, dtype=jnp.int32),
-        )
+        state = _clear_bombs(self._env, state)
         return self._env._get_observation(state), state
 
 
