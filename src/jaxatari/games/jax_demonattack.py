@@ -1889,11 +1889,6 @@ class DemonAttackRenderer(JAXGameRenderer):
         demon_mask = demon_masks[demon_anim_idx]
 
         spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
-        ids = jnp.arange(self.consts.MAX_DEMONS)
-        spacing = (
-            self.consts.DEMON_MAX_X - self.consts.DEMON_MIN_X
-        ) // (self.consts.MAX_DEMONS + 1)
-        spawn_target_x = self.consts.DEMON_MIN_X + (ids + 1) * spacing
 
         def render_demon(i, r):
             is_spawning = state.spawn_anim_timer[i] > 0
@@ -1916,7 +1911,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                 )
 
                 target_x = jnp.clip(
-                    spawn_target_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
+                    state.demons_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
                     self.consts.DEMON_MIN_X,
                     spawn_max_x,
                 )
