@@ -307,7 +307,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     PLAYER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(12, 7))
     DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 18))
     SMALL_DEMON_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(9, 10))
-    SMALL_DEMON_SPLIT_Y_OFFSET: int = struct.field(pytree_node=False, default=8)
     LASER_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=1)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
@@ -641,7 +640,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         secondary_alive: chex.Array,
     ) -> Tuple[chex.Array, chex.Array]:
         """
-        Returns two boolean masks whether the upper and lower small-demon parts are currently active.
+        Returns two boolean masks whether the left and right small-demon parts are currently active.
         Normal demons return False.
         """
         is_small = self._is_small_demon_status(status)
@@ -748,22 +747,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         x = jnp.where(is_small, split_left, state.demons_x)
         y = jnp.where(
             is_small,
-            jnp.where(
-                split_primary_active,
-                state.demons_y,
-                state.demons_y + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
-            ),
+            state.demons_y,
             state.demons_y,
         )
         width = jnp.where(is_small, split_right - split_left, self.consts.DEMON_SIZE[1])
         height = jnp.where(
             is_small,
-            jnp.where(
-                both_split_parts_active,
-                self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
-                + self.consts.SMALL_DEMON_SIZE[0],
-                self.consts.SMALL_DEMON_SIZE[0],
-            ),
+            self.consts.SMALL_DEMON_SIZE[0],
             self.consts.DEMON_SIZE[0],
         )
         return x, y, width.astype(jnp.int32), height.astype(jnp.int32)
@@ -1608,7 +1598,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
             demon_width = self._demon_width_size(s_status[i])
             demon_height = self._demon_height_size(s_status[i])
-            split_demon_y = state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET
 
             primary_overlap = self._laser_overlaps_rect(
                 state,
@@ -1622,7 +1611,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             secondary_overlap = self._laser_overlaps_rect(
                 state,
                 state.demon_split_x[i],
-                split_demon_y,
+                state.demons_y[i],
                 self.consts.SMALL_DEMON_SIZE[1],
                 self.consts.SMALL_DEMON_SIZE[0],
                 laser_right,
@@ -2362,7 +2351,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                     lambda: self.jr.render_at_clipped(
                         split_raster,
                         state.demon_split_x[i],
-                        state.demons_y[i] + self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
+                        state.demons_y[i],
                         small_demon_mask,
                     ),
                     lambda: split_raster,
@@ -2401,11 +2390,7 @@ class DemonAttackRenderer(JAXGameRenderer):
                     state.demon_split_x[i],
                     state.demons_x[i],
                 )
-                death_y = state.demons_y[i] + jnp.where(
-                    state.demon_split_death_part[i] == SPLIT_DEATH_SECONDARY,
-                    self.consts.SMALL_DEMON_SPLIT_Y_OFFSET,
-                    0,
-                )
+                death_y = state.demons_y[i]
                 death_raster = jax.lax.cond(
                     split_death,
                     render_split,
