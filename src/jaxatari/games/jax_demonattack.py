@@ -468,7 +468,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
         """Map the absolute wave number to pattern 0..11, then repeat 8..11."""
-        wave_number = jnp.maximum(wave_number, 0)
+        wave_number = jnp.maximum(wave_number, 8)
         repeating_pattern_count = (
             INITIAL_WAVE_PATTERNS - REPEATING_WAVE_PATTERN_START
         )
@@ -700,44 +700,30 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _demon_observation_bounds(
         self,
         state: DemonAttackState,
-    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+    ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
         """
-        A normal demon maps directly to ``demons_x``/``demons_y`` and
-        ``DEMON_SIZE``. After a split, the two small demons still occupy one
-        logical demon slot, so the observation reports the smallest rectangle
-        covering whichever split parts are still alive.
+        Demon observations expose every hittable demon part. The first
+        ``MAX_DEMONS`` entries are normal demons or primary split halves; the
+        next ``MAX_DEMONS`` entries are secondary split halves.
         """
         split_primary_active, split_secondary_active = self._split_part_active(
             state.demon_status,
             state.demon_split_primary_alive,
             state.demon_split_secondary_alive,
         )
-        both_split_parts_active = jnp.logical_and(split_primary_active, split_secondary_active)
-        split_left = jnp.where(
-            both_split_parts_active,
-            jnp.minimum(state.demons_x, state.demon_split_x),
-            jnp.where(split_primary_active, state.demons_x, state.demon_split_x),
-        )
-        split_right = jnp.where(
-            both_split_parts_active,
-            jnp.maximum(state.demons_x, state.demon_split_x)
-            + self.consts.SMALL_DEMON_SIZE[1],
-            split_left + self.consts.SMALL_DEMON_SIZE[1],
-        )
         is_small = self._is_small_demon_status(state.demon_status)
-        x = jnp.where(is_small, split_left, state.demons_x)
-        y = jnp.where(
-            is_small,
-            state.demons_y,
-            state.demons_y,
+        primary_active = jnp.where(is_small, split_primary_active, state.demons_alive)
+        primary_width = self._demon_width_size(state.demon_status)
+        primary_height = self._demon_height_size(state.demon_status)
+        secondary_width = jnp.full_like(primary_width, self.consts.SMALL_DEMON_SIZE[1])
+        secondary_height = jnp.full_like(primary_height, self.consts.SMALL_DEMON_SIZE[0])
+        return (
+            jnp.concatenate((state.demons_x, state.demon_split_x)),
+            jnp.concatenate((state.demons_y, state.demons_y)),
+            jnp.concatenate((primary_width, secondary_width)).astype(jnp.int32),
+            jnp.concatenate((primary_height, secondary_height)).astype(jnp.int32),
+            jnp.concatenate((primary_active, split_secondary_active)),
         )
-        width = jnp.where(is_small, split_right - split_left, self.consts.DEMON_SIZE[1])
-        height = jnp.where(
-            is_small,
-            self.consts.SMALL_DEMON_SIZE[0],
-            self.consts.DEMON_SIZE[0],
-        )
-        return x, y, width.astype(jnp.int32), height.astype(jnp.int32)
 
     def _can_split_demons(self, wave_pattern: chex.Array) -> chex.Array:
         """Waves 5-12 use the separate small-demons after a hit."""
@@ -1854,14 +1840,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             height=jnp.array(self.consts.PLAYER_SIZE[0]),
         )
 
-        demon_x, demon_y, demon_width, demon_height = self._demon_observation_bounds(state)
+        demon_x, demon_y, demon_width, demon_height, demon_active = self._demon_observation_bounds(state)
 
         demons = ObjectObservation.create(
             x=demon_x,
             y=demon_y,
             width=demon_width,
             height=demon_height,
-            active=state.demons_alive
+            active=demon_active
         )
 
         laser = ObjectObservation.create(
@@ -1895,7 +1881,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def observation_space(self) -> spaces.Dict:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
-        demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS,
+        demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS * 2,
                                                screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
 
         return spaces.Dict({
