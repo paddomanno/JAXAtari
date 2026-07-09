@@ -110,11 +110,43 @@ class LateWaveStartMod(JaxAtariPostStepModPlugin):
 class PlayerGuidedLaserMod(JaxAtariPostStepModPlugin):
     """Lets the player steer an active laser horizontally after firing."""
 
+    conflicts_with = ["homing_laser"]
+
     @partial(jax.jit, static_argnums=(0,))
     def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
         guided_x = new_state.player_x + self._env.consts.PLAYER_SIZE[1] // 2
         return new_state.replace(
             laser_x=jnp.where(new_state.laser_active, guided_x, new_state.laser_x),
+        )
+
+
+class HomingLaserMod(JaxAtariPostStepModPlugin):
+    """Steers the active player laser toward the nearest hittable demon."""
+
+    conflicts_with = ["player_guided_laser"]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
+        hittable = jnp.logical_and(
+            new_state.demons_alive,
+            new_state.spawn_anim_timer <= 0,
+        )
+        demon_center_x = new_state.demons_x + self._env.consts.DEMON_SIZE[1] // 2
+        target_idx = jnp.argmin(jnp.where(
+            hittable,
+            jnp.abs(demon_center_x - new_state.laser_x),
+            10_000,
+        ))
+        target_x = demon_center_x[target_idx] - self._env.consts.LASER_SIZE[1] // 2
+        laser_delta = jnp.clip(target_x - new_state.laser_x, -2, 2)
+        laser_x = jnp.clip(
+            new_state.laser_x + laser_delta,
+            self._env.consts.DEMON_MIN_X,
+            self._env.consts.DEMON_MAX_X,
+        )
+        should_home = jnp.logical_and(new_state.laser_active, jnp.any(hittable))
+        return new_state.replace(
+            laser_x=jnp.where(should_home, laser_x, new_state.laser_x),
         )
 
 
