@@ -29,6 +29,12 @@ class DemonAttackEnvMod(JaxAtariModController):
         "late_wave_start": LateWaveStartMod,
         "player_guided_laser": PlayerGuidedLaserMod,
         "teleporting_demons": TeleportingDemonsMod,
+        "advanced_survival": [
+            "late_wave_start",
+            "relentless_waves",
+            "player_guided_laser",
+            "teleporting_demons",
+        ],
     }
 
     def __init__(
