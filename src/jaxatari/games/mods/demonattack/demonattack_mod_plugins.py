@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from jaxatari.games.jax_demonattack import DemonAttackState
+from jaxatari.games.jax_demonattack import DEMON_STATUS_NORMAL, DemonAttackState
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 
@@ -207,4 +207,58 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
                 new_state.demon_moving_right,
             ),
             demon_moving_down=jnp.where(teleport, True, new_state.demon_moving_down),
+        )
+
+
+class SideStepLowestDemonsMod(JaxAtariPostStepModPlugin):
+    """Makes the lowest normal demon sidestep away from near misses until no other demon is alive."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
+        ids = jnp.arange(self._env.consts.MAX_DEMONS, dtype=jnp.int32)
+        active = jnp.logical_and(
+            new_state.demons_alive,
+            jnp.logical_and(
+                new_state.spawn_anim_timer <= 0,
+                new_state.spawn_pause_timer <= 0,
+            ),
+        )
+        active = jnp.logical_and(active, new_state.demon_status == DEMON_STATUS_NORMAL)
+        multiple_demons_alive = jnp.sum(new_state.demons_alive.astype(jnp.int32)) > 1
+        bottom_slot = jnp.array(self._env.consts.MAX_DEMONS - 1, dtype=jnp.int32)
+        moved_this_step = jnp.logical_or(
+            prev_state.demons_x != new_state.demons_x,
+            prev_state.demons_y != new_state.demons_y,
+        )
+        active = jnp.logical_and(
+            active,
+            jnp.logical_and(multiple_demons_alive, ids == bottom_slot),
+        )
+        active = jnp.logical_and(active, moved_this_step)
+
+        demon_center = new_state.demons_x + self._env.consts.DEMON_SIZE[1] // 2
+        laser_distance = jnp.abs(demon_center - new_state.laser_x)
+        laser_near_x = laser_distance <= 16
+        laser_in_lane = jnp.logical_and(
+            new_state.laser_y <= new_state.demons_y + self._env.consts.DEMON_SIZE[0] + 12,
+            new_state.laser_y >= new_state.demons_y - 28,
+        )
+        threatened = jnp.logical_and(
+            active,
+            jnp.logical_and(new_state.laser_active, jnp.logical_and(laser_near_x, laser_in_lane)),
+        )
+        dodge_active = threatened
+        dodge_dir = jnp.where(
+            new_state.laser_x < demon_center,
+            2,
+            -2,
+        )
+        demons_x = jnp.clip(
+            new_state.demons_x + jnp.where(dodge_active, dodge_dir, 0),
+            self._env.consts.DEMON_MIN_X,
+            self._env.consts.DEMON_MAX_X - self._env.consts.DEMON_SIZE[1],
+        )
+        return new_state.replace(
+            demons_x=demons_x,
+            demon_moving_right=jnp.where(dodge_active, dodge_dir > 0, new_state.demon_moving_right),
         )
