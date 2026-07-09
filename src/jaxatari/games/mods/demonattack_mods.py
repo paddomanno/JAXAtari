@@ -11,6 +11,7 @@ from jaxatari.games.mods.demonattack.demonattack_mod_plugins import (
     PlayerGuidedLaserMod,
     TeleportingDemonsMod,
     SideStepLowestDemonsMod,
+    ZigZagMovementDemonsMod,
 )
 
 
@@ -31,6 +32,7 @@ class DemonAttackEnvMod(JaxAtariModController):
         "player_guided_laser": PlayerGuidedLaserMod,
         "teleporting_demons": TeleportingDemonsMod,
         "sidestep_lowest_demon": SideStepLowestDemonsMod,
+        "zigzag_movement_demons": ZigZagMovementDemonsMod,
         "advanced_survival": [
             "late_wave_start",
             "relentless_waves",

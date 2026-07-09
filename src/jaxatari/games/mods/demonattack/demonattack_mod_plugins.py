@@ -262,3 +262,60 @@ class SideStepLowestDemonsMod(JaxAtariPostStepModPlugin):
             demons_x=demons_x,
             demon_moving_right=jnp.where(dodge_active, dodge_dir > 0, new_state.demon_moving_right),
         )
+
+
+class ZigZagMovementDemonsMod(JaxAtariPostStepModPlugin):
+    """Adds a zigzag movement pattern to normal demons."""
+
+    @partial(jax.jit, static_argnums=(0,))
+    def run(self, prev_state: DemonAttackState, new_state: DemonAttackState) -> DemonAttackState:
+        ids = jnp.arange(self._env.consts.MAX_DEMONS, dtype=jnp.int32)
+        normal_active = jnp.logical_and(
+            new_state.demon_status == DEMON_STATUS_NORMAL,
+            jnp.logical_and(
+                new_state.spawn_anim_timer <= 0,
+                new_state.spawn_pause_timer <= 0,
+            ),
+        )
+        source_firing = jnp.logical_and(
+            ids == new_state.bomb_source_idx,
+            jnp.logical_or(new_state.bomb_burst_length > 0, jnp.any(new_state.bomb_active)),
+        )
+        normal_active = jnp.logical_and(normal_active, jnp.logical_not(source_firing))
+        phase = jnp.mod(new_state.step_counter + ids * 13, 48)
+        zigzag = phase < 24
+        x_step = jnp.where(zigzag, 1, -1)
+        y_pulse = phase == 0
+        y_step = jnp.where(new_state.demon_moving_down, 1, -1)
+        demons_x = jnp.clip(
+            jnp.where(normal_active, prev_state.demons_x + x_step, new_state.demons_x),
+            self._env.consts.DEMON_MIN_X,
+            self._env.consts.DEMON_MAX_X - self._env.consts.DEMON_SIZE[1],
+        )
+        demons_y = jnp.clip(
+            jnp.where(
+                jnp.logical_and(normal_active, y_pulse),
+                prev_state.demons_y + y_step,
+                new_state.demons_y,
+            ),
+            self._env.consts.DEMON_MIN_Y,
+            self._env.consts.DEMON_MAX_Y - self._env.consts.DEMON_SIZE[0],
+        )
+        hit_x_edge = jnp.logical_or(
+            demons_x <= self._env.consts.DEMON_MIN_X,
+            demons_x >= self._env.consts.DEMON_MAX_X - self._env.consts.DEMON_SIZE[1],
+        )
+        return new_state.replace(
+            demons_x=demons_x,
+            demons_y=demons_y,
+            demon_moving_right=jnp.where(
+                jnp.logical_and(normal_active, hit_x_edge),
+                jnp.logical_not(new_state.demon_moving_right),
+                new_state.demon_moving_right,
+            ),
+            demon_moving_down=jnp.where(
+                jnp.logical_and(normal_active, y_pulse),
+                jnp.logical_not(new_state.demon_moving_down),
+                new_state.demon_moving_down,
+            ),
+        )
