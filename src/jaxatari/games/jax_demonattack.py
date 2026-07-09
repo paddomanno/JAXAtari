@@ -1517,7 +1517,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
-        # Laser vs Demons
+        # === Laser vs Demons ===
         laser_right = state.laser_x + self.consts.LASER_SIZE[1]
         laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
 
@@ -1582,26 +1582,52 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         killed = state.demons_alive & ~demons_alive # which demon was killed
 
-        # Bomb vs Player
+        # === Demon sprite vs Player sprite collision ===
+        player_right = state.player_x + self.consts.PLAYER_SIZE[1]
+        player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
+
+        def check_demon_player_collision(i, carry):
+            demon_hit_player = carry
+            # Only check alive demons that have finished spawning
+            demon_can_hit = jnp.logical_and(state.demons_alive[i], state.spawn_anim_timer[i] <= 0)
+
+            demon_right = state.demons_x[i] + self.consts.DEMON_SIZE[1]
+            demon_bottom = state.demons_y[i] + self.consts.DEMON_SIZE[0]
+
+            overlaps_horizontally = jnp.logical_and(
+                state.demons_x[i] < player_right,
+                demon_right > state.player_x,
+            )
+            overlaps_vertically = jnp.logical_and(
+                state.demons_y[i] < player_bottom,
+                demon_bottom > self.consts.PLAYER_Y,
+            )
+            collision = jnp.logical_and(overlaps_horizontally, overlaps_vertically)
+
+            return jnp.logical_or(demon_hit_player, jnp.logical_and(demon_can_hit, collision))
+
+        any_demon_player_contact = jax.lax.fori_loop(
+            0,
+            self.consts.MAX_DEMONS,
+            check_demon_player_collision,
+            False,
+        )
+
+        # Demon Bombs vs Player
         bomb_width, _ = self._bomb_observation_size(state)
         player_right = state.player_x + self.consts.PLAYER_SIZE[1]
         player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
         bomb_right = state.bomb_x + bomb_width
         bomb_top, bomb_bottom = self._bomb_collision_y_bounds(state)
-        player_hit = jnp.logical_and(
-            state.bomb_active,
-            jnp.logical_and(
-                bomb_right > state.player_x,
-                jnp.logical_and(
-                    state.bomb_x < player_right,
-                    jnp.logical_and(
-                        bomb_top < player_bottom,
-                        bomb_bottom > self.consts.PLAYER_Y,
-                    ),
-                )
-            )
-        )
-        any_player_hit = jnp.any(player_hit)
+        bomb_player_hit = jnp.any(state.bomb_active & (
+                (bomb_right > state.player_x) &
+                (state.bomb_x < player_right) &
+                (bomb_top < player_bottom) &
+                (bomb_bottom > self.consts.PLAYER_Y)
+        ))
+
+        # Check if either demons or demon bombs have hit the player
+        any_player_hit = jnp.logical_or(any_demon_player_contact, bomb_player_hit)
 
         bunker_available = state.lives > 0
         lives = jnp.where(
