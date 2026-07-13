@@ -928,13 +928,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 state.demon_split_primary_alive,
             ),
         )
+        not_diving = state.demon_mode == BEHAVIOR_NORMAL
         return jnp.logical_and(
-            lowest,
+            not_diving,
             jnp.logical_and(
-                active,
+                lowest,
                 jnp.logical_and(
-                    state.spawn_pause_timer <= 0,
-                    state.demon_death_anim_timer <= 0,
+                    active,
+                    jnp.logical_and(
+                        state.spawn_pause_timer <= 0,
+                        state.demon_death_anim_timer <= 0,
+                    ),
                 ),
             ),
         )
