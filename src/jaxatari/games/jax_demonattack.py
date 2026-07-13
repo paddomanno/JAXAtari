@@ -300,7 +300,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
-    SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
+    SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=0) # starting in this wave, demons split after a hit
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
@@ -986,14 +986,23 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return tracking_direction
 
     def _select_dive_starts(self, state: DemonAttackState) -> chex.Array:
-        """Return a boolean mask of which demon slots should switch into dive mode this frame"""
-        eligible = (
-                (state.demon_status == DEMON_STATUS_NORMAL)
+        """Return a boolean mask of which demon slots should switch into dive mode this frame.
+
+        Only the lowest slot is eligible. Only a small (split) demon may dive,
+        and only once its sibling half has died.
+        """
+        ids = jnp.arange(self.consts.MAX_DEMONS)
+        lowest = ids == self.consts.MAX_DEMONS - 1
+        is_small = self._is_small_demon_status(state.demon_status)
+        lone_survivor = jnp.logical_xor(
+            state.demon_split_primary_alive, state.demon_split_secondary_alive
+        )
+        return (
+                lowest
+                & is_small
+                & lone_survivor
                 & (state.demon_mode == BEHAVIOR_NORMAL)
         )
-        # placeholder policy - can be changed
-        roll = (state.demon_random & self.consts.DIVE_TRIGGER_MASK) == 0
-        return eligible & roll
 
     def _laser_step(self, state: DemonAttackState, action: chex.Array) -> DemonAttackState:
         # Fire laser if not active and FIRE action
@@ -1196,6 +1205,22 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(source_blocks_primary),
         )
 
+        # --- Run dive behavior ---
+
+        # Trigger dive: decide who starts diving this frame.
+        dive_start = self._select_dive_starts(state)
+        state = state.replace(
+            demon_mode=jnp.where(dive_start, BEHAVIOR_DIVE, state.demon_mode),
+            demon_dive_segment_step=jnp.where(dive_start, 0, state.demon_dive_segment_step),
+            demon_dive_x_dir=jnp.where(
+                dive_start, state.demons_x < state.player_x, state.demon_dive_x_dir
+            ),
+        )
+        secondary_is_diver = jnp.logical_and(
+            state.demon_split_secondary_alive,
+            jnp.logical_not(state.demon_split_primary_alive),
+        )
+
         # --- Run normal behavior ---
 
         # One slot per frame is nudged toward its spacing target. The random
@@ -1346,11 +1371,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_moving_right,
         )
 
+        # Move small (split) demons: either one tracks while the other sweeps, or dive.
+        not_diving = jnp.logical_and(
+            state.demon_mode == BEHAVIOR_NORMAL,
+            jnp.logical_not(dive_start),
+        )
         primary_split_mask, secondary_sweep_mask = self._split_part_active(
             demon_status,
             state.demon_split_primary_alive,
             state.demon_split_secondary_alive,
         )
+        primary_split_mask = jnp.logical_and(primary_split_mask, not_diving)
+        secondary_sweep_mask = jnp.logical_and(secondary_sweep_mask, not_diving)
         source_paused = jnp.logical_and(burst_in_progress, source_ids)
         primary_split_can_track = jnp.logical_and(
             slot_move,
@@ -1404,20 +1436,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demon_y_motion_accumulator,
         )
 
-        # --- Run dive behavior ---
-
-        # Trigger dive: decide who starts diving this frame.
-        dive_start = self._select_dive_starts(state)
+        # --- Apply dive or normal behavior, based on each demon's mode ---
+        dive_seed_x = jnp.where(secondary_is_diver, state.demon_split_x, state.demons_x)
         state = state.replace(
+            demons_x=jnp.where(dive_start, dive_seed_x, state.demons_x),
             demon_mode=jnp.where(dive_start, BEHAVIOR_DIVE, state.demon_mode),
             demon_dive_segment_step=jnp.where(dive_start, 0, state.demon_dive_segment_step),
-            demon_dive_x_dir=jnp.where(
-                dive_start, state.demons_x < state.player_x, state.demon_dive_x_dir
-            ),
+            demon_dive_x_dir=jnp.where(dive_start, dive_seed_x < state.player_x, state.demon_dive_x_dir),
         )
         is_diving = state.demon_mode == BEHAVIOR_DIVE
-
-        # --- Apply dive or normal behavior, based on each demon's mode ---
         dive = self._dive_demons_step(state, is_diving, can_move)
 
         demons_x = jnp.where(is_diving, dive["demons_x"], demons_x)
@@ -1432,6 +1459,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_status = jnp.where(is_diving, dive["demon_status"], demon_status)
         demon_mode = dive["demon_mode"]
 
+        # Copy the x-pos computed by the dive to the secondary demon if it's the one diving
+        demon_split_x = jnp.where(
+            jnp.logical_and(is_diving, secondary_is_diver),
+            demons_x,
+            demon_split_x,
+        )
 
         # Store the state, then derive the public alive mask and wave-spawned count.
         state = state.replace(
