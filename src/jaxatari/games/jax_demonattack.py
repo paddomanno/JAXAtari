@@ -297,7 +297,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
     DIVE_WAVE_UP_DURATION: int = struct.field(pytree_node=False, default=20) # how many frames of the segment are for the upward motion (the rest is downward)
     DIVE_WAVE_AMPLITUDE_PIXELS: int = struct.field(pytree_node=False, default=18)
-    DIVE_X_SPEED_FRAC: int = struct.field(pytree_node=False, default=160) # # accumulator change. 255 = 1 pixel/frame net horizontal movement
+    DIVE_X_SPEED_FRAC: int = struct.field(pytree_node=False, default=160) # accumulator change. 255 = 1 pixel/frame net horizontal movement
     DIVE_NET_DOWN_SPEED_FRAC: int = struct.field(pytree_node=False, default=80) # accumulator change. 255 = 1 pixel/frame net downward movement
     DIVE_DESPAWN_Y: int = struct.field(pytree_node=False, default=170)  # "slightly above the ground"
 
@@ -1216,7 +1216,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.demon_y_motion_accumulator,
         )
 
-        # --- Run dive behavior ----
+        # --- Run dive behavior ---
 
         # Trigger dive: decide who starts diving this frame.
         dive_start = self._select_dive_starts(state)
@@ -1517,7 +1517,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
 
     def _handle_collisions(self, state: DemonAttackState) -> DemonAttackState:
-        # === Laser vs Demons ===
+        # --- Laser vs Demons ---
         laser_right = state.laser_x + self.consts.LASER_SIZE[1]
         laser_bottom = state.laser_y + self.consts.LASER_SIZE[0]
 
@@ -1582,7 +1582,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         killed = state.demons_alive & ~demons_alive # which demon was killed
 
-        # === Demon sprite vs Player sprite collision ===
+        # --- Demon sprite vs Player sprite collision ---
         player_right = state.player_x + self.consts.PLAYER_SIZE[1]
         player_bottom = self.consts.PLAYER_Y + self.consts.PLAYER_SIZE[0]
 
