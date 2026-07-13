@@ -291,7 +291,7 @@ class DemonAttackConstants(AutoDerivedConstants):
             BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG,
             BOMB_TYPE_STANDARD, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_LONG),
     )
-    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(3, 4, 5, 5, 6, 6))
+    WAVE_LASER_SPEED_TABLE: Tuple[int, ...] = struct.field(pytree_node=False, default=(9, 4, 5, 5, 6, 6))
     ENEMY_SHOT_ACTION_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(8, 6, 6, 3, 5, 4, 5, 4, 5, 4, 5, 4),
@@ -1860,6 +1860,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_status = s_status.at[i].set(
                 jnp.where(split_demon, DEMON_STATUS_SMALL, status_after_hit)
             )
+            new_status
             new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
             new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
             new_score = jnp.where(demon_hit, s_score + 10 + state.wave_pattern * 2, s_score)
@@ -2017,6 +2018,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
             demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
             demon_status=demon_status,
+            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),  # <-- add this
             demon_phase=jnp.where(killed, 0, state.demon_phase),
             demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
             demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
