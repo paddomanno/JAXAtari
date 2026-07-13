@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from jaxatari.games.jax_demonattack import DEMON_STATUS_NORMAL, DemonAttackState
+from jaxatari.games.jax_demonattack import DEMON_STATUS_NORMAL, DemonAttackState, DEMON_STATUS_SMALL
 from jaxatari.modification import JaxAtariInternalModPlugin, JaxAtariPostStepModPlugin
 
 
@@ -176,11 +176,10 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
             eligible,
             new_state.spawn_pause_timer <= 0,
         )
-        #eligible = jnp.logical_and(
-        #    eligible,
-        #    new_state.demon_status != DEMON_STATUS_SMALL,
-        #)
-        # TODO when split/small demon PR merged, uncomment this
+        eligible = jnp.logical_and(
+            eligible,
+            new_state.demon_status != DEMON_STATUS_SMALL,
+        )
         eligible = jnp.logical_and(eligible, jnp.logical_not(teleport_busy))
         due = jnp.mod(new_state.step_counter, self.TELEPORT_INTERVAL) == 0
         desired_slot = jnp.mod(
