@@ -33,30 +33,6 @@ DIFFICULTY_TABLE_NAMES = (
     "WAVE_LASER_SPEED_TABLE",
 )
 
-def _create_digit_sprites(consts: "DemonAttackConstants") -> jnp.ndarray:
-    digits = np.zeros((10, 8, 8, 4), dtype=np.uint8)
-    color = np.array((*consts.SCORE_COLOR, 255), dtype=np.uint8)
-
-    patterns = [
-        [[1, 1, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 1, 1]],
-        [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]],
-        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 0, 0], [1, 1, 1]],
-        [[1, 1, 1], [0, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-        [[1, 0, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [0, 0, 1]],
-        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [1, 0, 0], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]],
-        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [1, 0, 1], [1, 1, 1]],
-        [[1, 1, 1], [1, 0, 1], [1, 1, 1], [0, 0, 1], [1, 1, 1]],
-    ]
-
-    for i, pattern in enumerate(patterns):
-        for r, row in enumerate(pattern):
-            for c, val in enumerate(row):
-                if val:
-                    digits[i, r + 1, c + 2] = color
-
-    return jnp.array(digits)
 
 def _get_default_asset_config() -> tuple:
     """
@@ -217,6 +193,7 @@ def _get_default_asset_config() -> tuple:
             'PlayerDeathAnimation/Explode_7.npy',
         ]},
         {'name': 'bunker', 'type': 'single', 'file': 'Bunker.npy'},
+        {'name': 'score_digits', 'type': 'digits', 'pattern': '{}.npy'},
     )
 
 def _bomb_visible_repeat_window(state, consts, bomb_type):
@@ -2251,11 +2228,6 @@ class DemonAttackRenderer(JAXGameRenderer):
             dtype=jnp.int32,
         )
 
-        # 2. Create procedural assets
-        digit_sprites = _create_digit_sprites(self.consts)
-
-        # Update asset config with procedural data
-        final_asset_config.append({'name': 'score_digits', 'type': 'procedural', 'data': digit_sprites})
 
         # 3. Bake assets
         sprite_path = os.path.join(os.path.dirname(__file__), "sprites", "demonattack")
@@ -2440,6 +2412,7 @@ class DemonAttackRenderer(JAXGameRenderer):
             start_index,
             num_to_render,
             spacing=8,
+            max_digits_to_render=4,
         )
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
