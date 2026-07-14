@@ -2412,6 +2412,7 @@ class DemonAttackRenderer(JAXGameRenderer):
             start_index,
             num_to_render,
             spacing=8,
+            max_digits_to_render=4,
         )
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
