@@ -1879,7 +1879,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             new_status = s_status.at[i].set(
                 jnp.where(split_demon, DEMON_STATUS_SMALL, status_after_hit)
             )
-            new_status
             new_primary_alive = s_primary_alive.at[i].set(new_primary_alive_value)
             new_secondary_alive = s_secondary_alive.at[i].set(new_secondary_alive_value)
             hit_score = self._score_value_for_hit(
