@@ -1365,6 +1365,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_y + jnp.where(demon_moving_down, 1, -1),
             demons_y,
         )
+        hit_bottom = jnp.logical_and(demon_moving_down, demons_y >= self.consts.DEMON_MAX_Y)
+        hit_top = jnp.logical_and(
+            jnp.logical_not(demon_moving_down),
+            demons_y <= self.consts.DEMON_MIN_Y,
+        )
+        turn_y = jnp.logical_and(move_y, jnp.logical_or(hit_bottom, hit_top))
+        demons_y = jnp.clip(demons_y, self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
+        demon_moving_down = jnp.where(turn_y, jnp.logical_not(demon_moving_down), demon_moving_down)
 
         # Horizontal boundary hits flip the direction. If the step overshot
         # the legal area, restore the previous x before continuing.
