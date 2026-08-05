@@ -211,7 +211,13 @@ class TeleportingDemonsMod(JaxAtariPostStepModPlugin):
             due,
             jnp.logical_and(has_target, ids == selected_slot),
         )
-        teleport = finish_warning
+
+        # When interrupted, it doesnt teleport anymore and only spawns split demons like before
+        uninterrupted_normal = jnp.logical_and(
+            prev_state.demon_status == DEMON_STATUS_NORMAL,
+            new_state.demon_status == DEMON_STATUS_NORMAL,
+        )
+        teleport = jnp.logical_and(finish_warning, uninterrupted_normal)
         x_span = (
             consts.DEMON_MAX_X
             - consts.DEMON_MIN_X
