@@ -241,7 +241,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
-    SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=45)
+    SPAWN_MOVE_PAUSE: int = struct.field(pytree_node=False, default=14)
     SPAWN_ANIM_WIDTH: int = struct.field(pytree_node=False, default=32)
     DEMON_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=18)
     WAVE_TOTAL_DEMONS: int = struct.field(pytree_node=False, default=8)
