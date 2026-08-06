@@ -349,7 +349,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 0, 0, 0, 0, 0, 0),
+        default=(-1, 1, 0, 0, -1, 1, 0, 0),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
@@ -1626,6 +1626,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.step_counter + slot_ids,
             len(self.consts.BOMB_JITTER_X_TABLE),
         )
+        jitter_offset = jitter_table[jitter_phase]
         jitter_x = self._bomb_jitter_for_type(bomb_type, jitter_table[jitter_phase])
 
         should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
