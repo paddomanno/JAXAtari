@@ -349,7 +349,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0, 0, 0, 0, 0, 0, 0),
+        default=(-2, -1, 0, 1, 2),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
