@@ -249,6 +249,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     HEIGHT: int = struct.field(pytree_node=False, default=192)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
     MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
+    DEMON_SLOTS: int = struct.field(pytree_node=False, default=4)
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
@@ -306,6 +307,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
     SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
+    BOTTOM_SLOT_REFILL_START_WAVE: int = struct.field(pytree_node=False, default=5)
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
@@ -510,21 +512,36 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def _initial_demon_values(self):
         """Build initial per-demon movement and spawn fields."""
-        zeros = jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32)
+        zeros = jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.int32)
+        initial_y = jnp.concatenate((
+            jnp.asarray(self.consts.DEMON_INITIAL_Y, dtype=jnp.int32),
+            jnp.full(
+                (self.consts.DEMON_SLOTS - self.consts.MAX_DEMONS,),
+                self.consts.DEMON_MAX_Y,
+                dtype=jnp.int32,
+            ),
+        ))
+        initial_phase = jnp.concatenate((
+            jnp.asarray(self.consts.DEMON_INITIAL_PHASE, dtype=jnp.int32),
+            jnp.zeros(
+                (self.consts.DEMON_SLOTS - self.consts.MAX_DEMONS,),
+                dtype=jnp.int32,
+            ),
+        ))
         return dict(
             demons_x=zeros,
-            demons_y=jnp.asarray(self.consts.DEMON_INITIAL_Y, dtype=jnp.int32),
-            demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demons_y=initial_y,
+            demons_alive=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
             demon_x_motion_accumulator=zeros,
             demon_y_motion_accumulator=zeros,
             demon_split_x=zeros,
-            demon_split_moving_right=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_split_primary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_split_secondary_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_status=jnp.full((self.consts.MAX_DEMONS,), DEMON_STATUS_FREE, dtype=jnp.int32),
-            demon_phase=jnp.asarray(self.consts.DEMON_INITIAL_PHASE, dtype=jnp.int32),
-            demon_moving_right=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
-            demon_moving_down=jnp.ones((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_split_moving_right=jnp.ones((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
+            demon_split_primary_alive=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
+            demon_split_secondary_alive=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
+            demon_status=jnp.full((self.consts.DEMON_SLOTS,), DEMON_STATUS_FREE, dtype=jnp.int32),
+            demon_phase=initial_phase,
+            demon_moving_right=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
+            demon_moving_down=jnp.ones((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
             demon_teleport=jnp.array(self.consts.DEMON_INITIAL_TELEPORT, dtype=jnp.int32),
             demon_teleport_timer=jnp.array(self.consts.DEMON_INITIAL_TELEPORT_TIMER, dtype=jnp.int32),
             wave_spawned_demons=jnp.array(0, dtype=jnp.int32),
@@ -535,7 +552,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_death_anim_y=zeros,
             demon_mode=zeros,
             demon_dive_segment_step=zeros,
-            demon_dive_x_dir=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_dive_x_dir=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
         )
 
     def _initial_bomb_values(self):
@@ -665,6 +682,44 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_alive=state.demon_status != DEMON_STATUS_FREE,
         )
 
+    def _shift_bottom_vacancy_to_top(self, state: DemonAttackState) -> DemonAttackState:
+        """Shift the formation down and detach its lone bottom split demon."""
+        def shift(values):
+            return jnp.roll(values, 1, axis=0)
+
+        shifted_y = shift(state.demons_y).at[0].set(
+            jnp.maximum(
+                self.consts.DEMON_MIN_Y,
+                state.demons_y[0] - self.consts.DEMON_MIN_VERTICAL_DISTANCE,
+            )
+        )
+        return state.replace(
+            demons_x=shift(state.demons_x),
+            demons_y=shifted_y,
+            demons_alive=shift(state.demons_alive),
+            demon_x_motion_accumulator=shift(state.demon_x_motion_accumulator),
+            demon_y_motion_accumulator=shift(state.demon_y_motion_accumulator),
+            demon_split_x=shift(state.demon_split_x),
+            demon_split_moving_right=shift(state.demon_split_moving_right),
+            demon_split_primary_alive=shift(state.demon_split_primary_alive),
+            demon_split_secondary_alive=shift(state.demon_split_secondary_alive),
+            demon_status=shift(state.demon_status),
+            demon_phase=shift(state.demon_phase),
+            demon_mode=shift(state.demon_mode),
+            demon_moving_right=shift(state.demon_moving_right),
+            demon_moving_down=shift(state.demon_moving_down),
+            spawn_anim_timer=shift(state.spawn_anim_timer),
+            spawn_pause_timer=shift(state.spawn_pause_timer),
+            demon_death_anim_timer=shift(state.demon_death_anim_timer),
+            demon_split_death_part=shift(state.demon_split_death_part),
+            demon_death_anim_x=shift(state.demon_death_anim_x),
+            demon_death_anim_y=shift(state.demon_death_anim_y),
+            demon_dive_segment_step=shift(state.demon_dive_segment_step),
+            demon_dive_x_dir=shift(state.demon_dive_x_dir),
+            demon_teleport=(state.demon_teleport + 1) % self.consts.DEMON_SLOTS,
+            bomb_source_idx=(state.bomb_source_idx + 1) % self.consts.DEMON_SLOTS,
+        )
+
     @staticmethod
     def _is_active_demon_status(status: chex.Array) -> chex.Array:
         return jnp.logical_or(status == DEMON_STATUS_NORMAL, status == DEMON_STATUS_SMALL)
@@ -785,8 +840,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             wave_number=wave_number,
             wave_pattern=self._resolve_wave_pattern(wave_number),
             **self._initial_demon_values(),
-            spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
-            spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            spawn_anim_timer=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.int32),
+            spawn_pause_timer=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             **self._initial_bomb_values(),
         )
@@ -805,7 +860,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             should_freeze,
             lambda s: s.replace(
                 wave_number=next_wave_number,
-                demons_alive=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+                demons_alive=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.bool_),
                 **self._initial_bomb_values(),
                 laser_active=jnp.array(False, dtype=jnp.bool_),
                 game_frozen=jnp.array(True, dtype=jnp.bool_),
@@ -838,8 +893,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             explosion_timer=jnp.array(0, dtype=jnp.int32),
             wave_number=wave_number,
             wave_pattern=self._resolve_wave_pattern(wave_number),
-            spawn_anim_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
-            spawn_pause_timer=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.int32),
+            spawn_anim_timer=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.int32),
+            spawn_pause_timer=jnp.zeros((self.consts.DEMON_SLOTS,), dtype=jnp.int32),
             game_frozen=jnp.array(False, dtype=jnp.bool_),
             game_over=jnp.array(False, dtype=jnp.bool_),
             step_counter=jnp.array(0, dtype=jnp.int32),
@@ -953,7 +1008,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon or a split demon with at least one surviving half, and its
         post-spawn pause has elapsed.
         """
-        ids = jnp.arange(self.consts.MAX_DEMONS)
+        ids = jnp.arange(self.consts.DEMON_SLOTS)
         lowest = ids == self.consts.MAX_DEMONS - 1
         active = jnp.logical_or(
             state.demon_status == DEMON_STATUS_NORMAL,
@@ -1029,8 +1084,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         Only the lowest slot is eligible. Only a small (split) demon may dive,
         and only once its sibling half has died.
         """
-        ids = jnp.arange(self.consts.MAX_DEMONS)
-        lowest = ids == self.consts.MAX_DEMONS - 1
+        ids = jnp.arange(self.consts.DEMON_SLOTS)
+        lowest = jnp.logical_or(
+            ids == self.consts.MAX_DEMONS - 1,
+            ids == self.consts.DEMON_SLOTS - 1,
+        )
         is_small = self._is_small_demon_status(state.demon_status)
         lone_survivor = jnp.logical_xor(
             state.demon_split_primary_alive, state.demon_split_secondary_alive
@@ -1197,8 +1255,30 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         free slots are scheduled through ``demon_teleport_timer``, and normal
         demons move when their 8-bit motion accumulators overflow.
         """
+        bottom_slot = self.consts.MAX_DEMONS - 1
+        overflow_slot = self.consts.DEMON_SLOTS - 1
+        bottom_has_lone_split_demon = jnp.logical_and(
+            state.demon_status[bottom_slot] == DEMON_STATUS_SMALL,
+            jnp.logical_xor(
+                state.demon_split_primary_alive[bottom_slot],
+                state.demon_split_secondary_alive[bottom_slot],
+            ),
+        )
+        should_shift_formation = jnp.logical_and(
+            state.wave_pattern >= self.consts.BOTTOM_SLOT_REFILL_START_WAVE,
+            jnp.logical_and(
+                bottom_has_lone_split_demon,
+                state.demon_status[overflow_slot] == DEMON_STATUS_FREE,
+            ),
+        )
+        state = jax.lax.cond(
+            should_shift_formation,
+            self._shift_bottom_vacancy_to_top,
+            lambda s: s,
+            operand=state,
+        )
         state = state.replace(demon_random=self._next_demon_random(state.demon_random))
-        ids = jnp.arange(self.consts.MAX_DEMONS)
+        ids = jnp.arange(self.consts.DEMON_SLOTS)
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
 
@@ -1320,11 +1400,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         can_schedule = jnp.logical_and(state.demon_teleport_timer == 0, can_appear)
         demon_status = state.demon_status
+        formation_slot = ids < self.consts.MAX_DEMONS
         free = jnp.logical_and(
+            formation_slot,
+            jnp.logical_and(
             demon_status == DEMON_STATUS_FREE,
             state.demon_death_anim_timer <= 0,
+            ),
         )
-        scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(free[::-1].astype(jnp.int32))
+        formation_free = free[:self.consts.MAX_DEMONS]
+        scheduled = self.consts.MAX_DEMONS - 1 - jnp.argmax(
+            formation_free[::-1].astype(jnp.int32)
+        )
         schedule = jnp.logical_and(can_schedule, jnp.any(free))
 
         # New demons start from the target row for their slot so the formation
@@ -1457,11 +1544,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demons_y[2],
             middle + self.consts.DEMON_MIN_VERTICAL_DISTANCE,
         )
-        demons_y = jnp.clip(jnp.stack((
+        formation_y = jnp.clip(jnp.stack((
             top,
             middle,
             bottom,
         )), self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y).astype(jnp.int32)
+        demons_y = demons_y.at[:self.consts.MAX_DEMONS].set(formation_y)
 
         demon_x_motion_accumulator = jnp.where(
             can_move,
@@ -1920,7 +2008,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             laser_active,
         ) = jax.lax.fori_loop(
             0,
-            self.consts.MAX_DEMONS,
+            self.consts.DEMON_SLOTS,
             check_demon_collision,
             init_carry,
         )
@@ -1988,7 +2076,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         any_demon_player_contact = jax.lax.fori_loop(
             0,
-            self.consts.MAX_DEMONS,
+            self.consts.DEMON_SLOTS,
             check_demon_player_collision,
             False,
         )
@@ -2195,7 +2283,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
     def observation_space(self) -> spaces.Dict:
         object_space = spaces.get_object_space(n=None, screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
-        demons_space = spaces.get_object_space(n=self.consts.MAX_DEMONS * 2,
+        demons_space = spaces.get_object_space(n=self.consts.DEMON_SLOTS * 2,
                                                screen_size=(self.consts.HEIGHT, self.consts.WIDTH))
 
         return spaces.Dict({
@@ -2696,4 +2784,4 @@ class DemonAttackRenderer(JAXGameRenderer):
                 ),
             )
 
-        return jax.lax.fori_loop(0, self.consts.MAX_DEMONS, render_demon, raster)
+        return jax.lax.fori_loop(0, self.consts.DEMON_SLOTS, render_demon, raster)
