@@ -2087,8 +2087,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         # --- Later waves: shift survivors down to fill the kill, respawn on top ---
         killed_idx = jnp.argmax(killed.astype(jnp.int32))
+
+        # Purely positional reindex — no longer waits on an in-flight teleport,
+        # which only ever decided who *owns* the countdown, not whether a shift
+        # is legal.
         use_shift = jnp.logical_and(
-            reset_teleport_for_kill,  # only reshuffle when we're also free to retarget the spawn
+            demon_killed,
             self._use_shifting_respawn(state.wave_pattern),
         )
 
@@ -2111,22 +2115,27 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_dive_x_dir=state.demon_dive_x_dir,
             spawn_anim_timer=state.spawn_anim_timer,
             spawn_pause_timer=state.spawn_pause_timer,
+            # Death-overlay fields must travel with their slot, or a survivor that
+            # shifts into an index still holding a stale death timer will
+            # freeze/vanish for DEMON_DEATH_ANIMATION_DURATION frames.
+            demon_death_anim_timer=state.demon_death_anim_timer,
+            demon_split_death_part=state.demon_split_death_part,
+            demon_death_anim_x=state.demon_death_anim_x,
+            demon_death_anim_y=state.demon_death_anim_y,
         )
-        # The freed slot is always slot 0 after a shift, regardless of what its
-        # previous occupant's data looked like.
         shifted["demon_status"] = shifted["demon_status"].at[0].set(DEMON_STATUS_FREE)
         shifted["demon_split_primary_alive"] = shifted["demon_split_primary_alive"].at[0].set(False)
         shifted["demon_split_secondary_alive"] = shifted["demon_split_secondary_alive"].at[0].set(False)
+        shifted["demon_death_anim_timer"] = shifted["demon_death_anim_timer"].at[0].set(0)
+        shifted["demon_split_death_part"] = shifted["demon_split_death_part"].at[0].set(SPLIT_DEATH_NONE)
 
         demon_status = jnp.where(use_shift, shifted["demon_status"], demon_status)
         demons_x = jnp.where(use_shift, shifted["demons_x"], demons_x)
         demons_y = jnp.where(use_shift, shifted["demons_y"], demons_y)
-        demon_x_motion_accumulator = jnp.where(
-            use_shift, shifted["demon_x_motion_accumulator"], state.demon_x_motion_accumulator
-        )
-        demon_y_motion_accumulator = jnp.where(
-            use_shift, shifted["demon_y_motion_accumulator"], state.demon_y_motion_accumulator
-        )
+        demon_x_motion_accumulator = jnp.where(use_shift, shifted["demon_x_motion_accumulator"],
+                                               state.demon_x_motion_accumulator)
+        demon_y_motion_accumulator = jnp.where(use_shift, shifted["demon_y_motion_accumulator"],
+                                               state.demon_y_motion_accumulator)
         demon_split_x = jnp.where(use_shift, shifted["demon_split_x"], demon_split_x)
         demon_split_moving_right = jnp.where(use_shift, shifted["demon_split_moving_right"], demon_split_moving_right)
         demon_split_primary_alive = jnp.where(use_shift, shifted["demon_split_primary_alive"],
@@ -2142,10 +2151,45 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_dive_x_dir = jnp.where(use_shift, shifted["demon_dive_x_dir"], state.demon_dive_x_dir)
         spawn_anim_timer = jnp.where(use_shift, shifted["spawn_anim_timer"], state.spawn_anim_timer)
         spawn_pause_timer = jnp.where(use_shift, shifted["spawn_pause_timer"], state.spawn_pause_timer)
+        demon_death_anim_timer = jnp.where(use_shift, shifted["demon_death_anim_timer"], state.demon_death_anim_timer)
+        demon_split_death_part = jnp.where(use_shift, shifted["demon_split_death_part"], state.demon_split_death_part)
+        demon_death_anim_x = jnp.where(use_shift, shifted["demon_death_anim_x"], state.demon_death_anim_x)
+        demon_death_anim_y = jnp.where(use_shift, shifted["demon_death_anim_y"], state.demon_death_anim_y)
 
-        # Respawn target: the freed top slot when shifting, otherwise the slot
-        # that was actually killed (unchanged early-wave behavior).
+        # Any in-flight teleport countdown must follow its slot through the same
+        # permutation: old slots [0, killed_idx) moved to [1, killed_idx].
+        teleport_after_shift = jnp.where(
+            state.demon_teleport < killed_idx,
+            state.demon_teleport + 1,
+            state.demon_teleport,
+        )
+        demon_teleport_tracked = jnp.where(use_shift, teleport_after_shift, state.demon_teleport)
+
         respawn_slot = jnp.where(use_shift, jnp.array(0, dtype=jnp.int32), killed_idx)
+
+        # Write this frame's freshly-triggered death overlay at the index the dying
+        # demon now occupies (respawn_slot under a shift, its own index otherwise) —
+        # not at the pre-shift index, which was the bug in the original version.
+        death_event_idx = jnp.argmax(death_anim_started.astype(jnp.int32))
+        any_death_event = jnp.any(death_anim_started)
+        final_death_target = jnp.where(use_shift, respawn_slot, death_event_idx)
+
+        demon_death_anim_timer = demon_death_anim_timer.at[final_death_target].set(
+            jnp.where(
+                any_death_event,
+                self.consts.DEMON_DEATH_ANIMATION_DURATION,
+                demon_death_anim_timer[final_death_target],
+            )
+        )
+        demon_split_death_part = demon_split_death_part.at[final_death_target].set(
+            jnp.where(any_death_event, split_death_part[death_event_idx], demon_split_death_part[final_death_target])
+        )
+        demon_death_anim_x = demon_death_anim_x.at[final_death_target].set(
+            jnp.where(any_death_event, death_anim_x[death_event_idx], demon_death_anim_x[final_death_target])
+        )
+        demon_death_anim_y = demon_death_anim_y.at[final_death_target].set(
+            jnp.where(any_death_event, death_anim_y[death_event_idx], demon_death_anim_y[final_death_target])
+        )
 
         state = state.replace(
             demons_alive=demon_status != DEMON_STATUS_FREE,
@@ -2169,33 +2213,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_teleport=jnp.where(
                 reset_teleport_for_kill,
                 respawn_slot,
-                state.demon_teleport,
+                demon_teleport_tracked,
             ),
             demon_teleport_timer=jnp.where(
                 reset_teleport_for_kill,
                 0,
                 state.demon_teleport_timer,
             ),
-            demon_death_anim_timer=jnp.where(
-                death_anim_started,
-                self.consts.DEMON_DEATH_ANIMATION_DURATION,
-                state.demon_death_anim_timer,
-            ),
-            demon_split_death_part=jnp.where(
-                death_anim_started,
-                split_death_part,
-                state.demon_split_death_part,
-            ),
-            demon_death_anim_x=jnp.where(
-                death_anim_started,
-                death_anim_x,
-                state.demon_death_anim_x,
-            ),
-            demon_death_anim_y=jnp.where(
-                death_anim_started,
-                death_anim_y,
-                state.demon_death_anim_y,
-            ),
+            demon_death_anim_timer=demon_death_anim_timer,
+            demon_split_death_part=demon_split_death_part,
+            demon_death_anim_x=demon_death_anim_x,
+            demon_death_anim_y=demon_death_anim_y,
             score=score,
             laser_active=laser_active,
             lives=lives,
