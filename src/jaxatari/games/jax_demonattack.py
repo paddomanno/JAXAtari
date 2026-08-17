@@ -409,6 +409,7 @@ class DemonAttackState(struct.PyTreeNode):
     demon_death_anim_y: chex.Array
     demon_dive_segment_step: chex.Array  # int32, frames elapsed in the current V-segment
     demon_dive_x_dir: chex.Array  # bool, moving right during current segment
+    demon_dive_despawned: chex.Array  # bool, set when a diving demon left the screen this frame
 
     bomb_x: chex.Array
     bomb_y: chex.Array
@@ -537,6 +538,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_mode=zeros,
             demon_dive_segment_step=zeros,
             demon_dive_x_dir=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
+            demon_dive_despawned=jnp.zeros((self.consts.MAX_DEMONS,), dtype=jnp.bool_),
         )
 
     def _initial_bomb_values(self):
@@ -1208,6 +1210,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             "demon_dive_segment_step": demon_dive_segment_step,
             "demon_status": demon_status,
             "demon_mode": demon_mode,
+            "despawn": despawn,
         }
 
     def _demons_step(self, state: DemonAttackState) -> DemonAttackState:
@@ -1504,6 +1507,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         is_diving = state.demon_mode == BEHAVIOR_DIVE
         dive = self._dive_demons_step(state, is_diving, can_move)
+        demon_dive_despawned = dive["despawn"]
 
         demons_x = jnp.where(is_diving, dive["demons_x"], demons_x)
         demons_y = jnp.where(is_diving, dive["demons_y"], demons_y)
@@ -1564,6 +1568,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
             demon_dive_x_dir=demon_dive_x_dir,
             demon_dive_segment_step=demon_dive_segment_step,
+            demon_dive_despawned=demon_dive_despawned,
         )
         return self._sync_demon_status(state)
 
@@ -1950,6 +1955,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_status == DEMON_STATUS_FREE,
         )
         demon_killed = jnp.any(killed) # boolean if at least one demon was killed
+        dive_despawned = state.demon_dive_despawned
+        killed_for_shift = jnp.logical_or(killed, dive_despawned)
+        demon_killed_for_shift = jnp.logical_or(demon_killed, jnp.any(dive_despawned))
         split = jnp.logical_and(
             state.demon_status == DEMON_STATUS_NORMAL,
             self._is_small_demon_status(demon_status),
@@ -2070,7 +2078,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         teleport_busy = state.demon_teleport_timer > 0
         reset_teleport_for_kill = jnp.logical_and(
-            demon_killed,
+            demon_killed_for_shift,
             jnp.logical_not(teleport_busy),
         )
 
@@ -2086,14 +2094,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon_split_moving_right = jnp.where(split, True, state.demon_split_moving_right)
 
         # --- Later waves: shift survivors down to fill the kill, respawn on top ---
-        killed_idx = jnp.argmax(killed.astype(jnp.int32))
+        killed_idx = jnp.argmax(killed_for_shift.astype(jnp.int32))
 
         # Purely positional reindex — no longer waits on an in-flight teleport,
         # which only ever decided who *owns* the countdown, not whether a shift
         # is legal.
         use_shift = jnp.logical_and(
-            demon_killed,
-            self._use_shifting_respawn(state.wave_pattern),
+            demon_killed_for_shift,
+            jnp.logical_and(
+                self._use_shifting_respawn(state.wave_pattern),
+                killed_idx == self.consts.MAX_DEMONS - 1,
+            ),
         )
 
         shifted = self._shift_demon_slots_for_kill(
@@ -2224,6 +2235,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             demon_split_death_part=demon_split_death_part,
             demon_death_anim_x=demon_death_anim_x,
             demon_death_anim_y=demon_death_anim_y,
+            demon_dive_despawned=jnp.zeros_like(state.demon_dive_despawned),
             score=score,
             laser_active=laser_active,
             lives=lives,
