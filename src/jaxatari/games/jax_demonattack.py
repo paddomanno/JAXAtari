@@ -307,6 +307,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     ) # TODO needs adjustments
     SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
+    SHIFTING_RESPAWN_START_WAVE: int = struct.field(pytree_node=False, default=4)
 
     DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
     DIVE_SEGMENT_DURATION: int = struct.field(pytree_node=False, default=50)  # frames per V segment
@@ -778,6 +779,25 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _can_split_demons(self, wave_pattern: chex.Array) -> chex.Array:
         """Waves 5-12 use the separate small-demons after a hit."""
         return wave_pattern >= self.consts.SPLIT_DEMONS_START_WAVE
+
+    def _use_shifting_respawn(self, wave_pattern: chex.Array) -> chex.Array:
+        """Later waves reshuffle the formation on a kill instead of respawning in
+        place: every surviving demon above the kill shifts down one slot, and the
+        replacement always spawns in the top slot."""
+        return wave_pattern >= self.consts.SHIFTING_RESPAWN_START_WAVE
+
+    def _shift_demon_slots_for_kill(
+            self, killed_idx: chex.Array, **fields: chex.Array
+    ) -> dict:
+        """Shift slots [0, killed_idx) down into [1, killed_idx], freeing slot 0
+        for the next spawn. Slots below killed_idx are untouched."""
+        ids = jnp.arange(self.consts.MAX_DEMONS)
+        source_index = jnp.where(
+            jnp.logical_and(ids >= 1, ids <= killed_idx),
+            ids - 1,
+            ids,
+        )
+        return {name: arr[source_index] for name, arr in fields.items()}
 
     def _initialize_wave_state(self, state: DemonAttackState, wave_number: chex.Array) -> DemonAttackState:
         """Replace the previous wave state with a new initialized wave."""
@@ -2054,21 +2074,101 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.logical_not(teleport_busy),
         )
 
+        demon_split_primary_alive = jnp.where(killed, False, demon_split_primary_alive)
+        demon_split_secondary_alive = jnp.where(killed, False, demon_split_secondary_alive)
+        demon_mode = jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode)
+        demon_phase = jnp.where(killed, 0, state.demon_phase)
+        demon_moving_right = jnp.where(killed, False, state.demon_moving_right)
+        demon_moving_down = jnp.where(killed, True, state.demon_moving_down)
+        demons_x = jnp.where(split, center_small_x, state.demons_x)
+        demons_y = state.demons_y
+        demon_split_x = jnp.where(split, second_small_x, state.demon_split_x)
+        demon_split_moving_right = jnp.where(split, True, state.demon_split_moving_right)
+
+        # --- Later waves: shift survivors down to fill the kill, respawn on top ---
+        killed_idx = jnp.argmax(killed.astype(jnp.int32))
+        use_shift = jnp.logical_and(
+            reset_teleport_for_kill,  # only reshuffle when we're also free to retarget the spawn
+            self._use_shifting_respawn(state.wave_pattern),
+        )
+
+        shifted = self._shift_demon_slots_for_kill(
+            killed_idx,
+            demon_status=demon_status,
+            demons_x=demons_x,
+            demons_y=demons_y,
+            demon_x_motion_accumulator=state.demon_x_motion_accumulator,
+            demon_y_motion_accumulator=state.demon_y_motion_accumulator,
+            demon_split_x=demon_split_x,
+            demon_split_moving_right=demon_split_moving_right,
+            demon_split_primary_alive=demon_split_primary_alive,
+            demon_split_secondary_alive=demon_split_secondary_alive,
+            demon_phase=demon_phase,
+            demon_mode=demon_mode,
+            demon_moving_right=demon_moving_right,
+            demon_moving_down=demon_moving_down,
+            demon_dive_segment_step=state.demon_dive_segment_step,
+            demon_dive_x_dir=state.demon_dive_x_dir,
+            spawn_anim_timer=state.spawn_anim_timer,
+            spawn_pause_timer=state.spawn_pause_timer,
+        )
+        # The freed slot is always slot 0 after a shift, regardless of what its
+        # previous occupant's data looked like.
+        shifted["demon_status"] = shifted["demon_status"].at[0].set(DEMON_STATUS_FREE)
+        shifted["demon_split_primary_alive"] = shifted["demon_split_primary_alive"].at[0].set(False)
+        shifted["demon_split_secondary_alive"] = shifted["demon_split_secondary_alive"].at[0].set(False)
+
+        demon_status = jnp.where(use_shift, shifted["demon_status"], demon_status)
+        demons_x = jnp.where(use_shift, shifted["demons_x"], demons_x)
+        demons_y = jnp.where(use_shift, shifted["demons_y"], demons_y)
+        demon_x_motion_accumulator = jnp.where(
+            use_shift, shifted["demon_x_motion_accumulator"], state.demon_x_motion_accumulator
+        )
+        demon_y_motion_accumulator = jnp.where(
+            use_shift, shifted["demon_y_motion_accumulator"], state.demon_y_motion_accumulator
+        )
+        demon_split_x = jnp.where(use_shift, shifted["demon_split_x"], demon_split_x)
+        demon_split_moving_right = jnp.where(use_shift, shifted["demon_split_moving_right"], demon_split_moving_right)
+        demon_split_primary_alive = jnp.where(use_shift, shifted["demon_split_primary_alive"],
+                                              demon_split_primary_alive)
+        demon_split_secondary_alive = jnp.where(use_shift, shifted["demon_split_secondary_alive"],
+                                                demon_split_secondary_alive)
+        demon_phase = jnp.where(use_shift, shifted["demon_phase"], demon_phase)
+        demon_mode = jnp.where(use_shift, shifted["demon_mode"], demon_mode)
+        demon_moving_right = jnp.where(use_shift, shifted["demon_moving_right"], demon_moving_right)
+        demon_moving_down = jnp.where(use_shift, shifted["demon_moving_down"], demon_moving_down)
+        demon_dive_segment_step = jnp.where(use_shift, shifted["demon_dive_segment_step"],
+                                            state.demon_dive_segment_step)
+        demon_dive_x_dir = jnp.where(use_shift, shifted["demon_dive_x_dir"], state.demon_dive_x_dir)
+        spawn_anim_timer = jnp.where(use_shift, shifted["spawn_anim_timer"], state.spawn_anim_timer)
+        spawn_pause_timer = jnp.where(use_shift, shifted["spawn_pause_timer"], state.spawn_pause_timer)
+
+        # Respawn target: the freed top slot when shifting, otherwise the slot
+        # that was actually killed (unchanged early-wave behavior).
+        respawn_slot = jnp.where(use_shift, jnp.array(0, dtype=jnp.int32), killed_idx)
+
         state = state.replace(
             demons_alive=demon_status != DEMON_STATUS_FREE,
-            demons_x=jnp.where(split, center_small_x, state.demons_x),
-            demon_split_x=jnp.where(split, second_small_x, state.demon_split_x),
-            demon_split_moving_right=jnp.where(split, True, state.demon_split_moving_right),
-            demon_split_primary_alive=jnp.where(killed, False, demon_split_primary_alive),
-            demon_split_secondary_alive=jnp.where(killed, False, demon_split_secondary_alive),
+            demons_x=demons_x,
+            demons_y=demons_y,
+            demon_x_motion_accumulator=demon_x_motion_accumulator,
+            demon_y_motion_accumulator=demon_y_motion_accumulator,
+            demon_split_x=demon_split_x,
+            demon_split_moving_right=demon_split_moving_right,
+            demon_split_primary_alive=demon_split_primary_alive,
+            demon_split_secondary_alive=demon_split_secondary_alive,
             demon_status=demon_status,
-            demon_mode=jnp.where(killed, BEHAVIOR_NORMAL, state.demon_mode),  # <-- add this
-            demon_phase=jnp.where(killed, 0, state.demon_phase),
-            demon_moving_right=jnp.where(killed, False, state.demon_moving_right),
-            demon_moving_down=jnp.where(killed, True, state.demon_moving_down),
+            demon_mode=demon_mode,
+            demon_phase=demon_phase,
+            demon_moving_right=demon_moving_right,
+            demon_moving_down=demon_moving_down,
+            demon_dive_segment_step=demon_dive_segment_step,
+            demon_dive_x_dir=demon_dive_x_dir,
+            spawn_anim_timer=spawn_anim_timer,
+            spawn_pause_timer=spawn_pause_timer,
             demon_teleport=jnp.where(
                 reset_teleport_for_kill,
-                jnp.argmax(killed.astype(jnp.int32)),
+                respawn_slot,
                 state.demon_teleport,
             ),
             demon_teleport_timer=jnp.where(
