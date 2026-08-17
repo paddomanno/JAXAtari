@@ -2403,16 +2403,20 @@ class DemonAttackRenderer(JAXGameRenderer):
             jax.lax.select(is_double_digit, 2, jax.lax.select(is_triple_digit, 3, 4)),
         )
 
+        SCORE_X = 72
+        SCORE_Y = 7
+        SCORE_SPACING = 8
+
         raster = self.jr.render_label_selective(
             raster,
-            70,
-            10,
+            SCORE_X + start_index * SCORE_SPACING,
+            SCORE_Y,
             score_digits,
             digit_masks,
             start_index,
             num_to_render,
-            spacing=8,
-            max_digits_to_render=4,
+            spacing=SCORE_SPACING,
+            max_digits_to_render=6,
         )
 
         frame = self.jr.render_from_palette(raster, self.PALETTE)
