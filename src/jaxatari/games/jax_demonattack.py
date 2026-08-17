@@ -306,8 +306,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(1, 1, 2, 2, 3, 3),
     ) # TODO needs adjustments
-    SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit
-    BOTTOM_SLOT_REFILL_START_WAVE: int = struct.field(pytree_node=False, default=5)
+    SPLIT_DEMONS_START_WAVE: int = struct.field(pytree_node=False, default=4) # starting in this wave, demons split after a hit and refill bottom and respawn on top
     TRACKING_PROJECTILES_START_WAVE: int = struct.field(pytree_node=False, default=8) # starting in this wave, the demons begin using projectiles that follow the demon
 
     DIVE_TRIGGER_MASK: int = struct.field(pytree_node=False, default=63)  # controls trigger frequency (trigger policy detail)
@@ -1265,7 +1264,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             ),
         )
         should_shift_formation = jnp.logical_and(
-            state.wave_pattern >= self.consts.BOTTOM_SLOT_REFILL_START_WAVE,
+            state.wave_pattern >= self.consts.SPLIT_DEMONS_START_WAVE,
             jnp.logical_and(
                 bottom_has_lone_split_demon,
                 state.demon_status[overflow_slot] == DEMON_STATUS_FREE,
