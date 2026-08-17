@@ -248,8 +248,8 @@ class DemonAttackConstants(AutoDerivedConstants):
     WIDTH: int = struct.field(pytree_node=False, default=160)
     HEIGHT: int = struct.field(pytree_node=False, default=192)
     PLAYER_SPEED: int = struct.field(pytree_node=False, default=1)
-    MAX_DEMONS: int = struct.field(pytree_node=False, default=3)
-    DEMON_SLOTS: int = struct.field(pytree_node=False, default=4)
+    MAX_DEMONS: int = struct.field(pytree_node=False, default=3) # visible formation
+    DEMON_SLOTS: int = struct.field(pytree_node=False, default=4) # keeps extra bottom split demon slot
     RESPAWN_DELAY: int = struct.field(pytree_node=False, default=30)
     SPAWN_ANIM_FRAMES: int = struct.field(pytree_node=False, default=3)
     SPAWN_ANIM_FRAME_DURATION: int = struct.field(pytree_node=False, default=6)
@@ -386,8 +386,8 @@ class DemonAttackState(struct.PyTreeNode):
     laser_active: chex.Array
 
     demons_x: chex.Array
-    demons_y: chex.Array  # Shape: (MAX_DEMONS,)
-    demons_alive: chex.Array  # Shape: (MAX_DEMONS,) bool
+    demons_y: chex.Array  # Shape: (DEMON_SLOTS,)
+    demons_alive: chex.Array  # Shape: (DEMON_SLOTS,) bool
     demon_x_motion_accumulator: chex.Array  # 8-bit fractional horizontal motion carry per slot
     demon_y_motion_accumulator: chex.Array  # 8-bit fractional vertical motion carry per slot
     demon_split_x: chex.Array  # X position for the lower small demon after a split
@@ -680,6 +680,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return state.replace(
             demons_alive=state.demon_status != DEMON_STATUS_FREE,
         )
+
+    def _demon_slot_ids(self) -> chex.Array:
+        """Return all state slots, including the detached-demon overflow slot."""
+        return jnp.arange(self.consts.DEMON_SLOTS)
+
+    def _formation_slot_ids(self) -> chex.Array:
+        """Return only the three slots that participate in formation logic."""
+        return jnp.arange(self.consts.MAX_DEMONS)
 
     def _shift_bottom_vacancy_to_top(self, state: DemonAttackState) -> DemonAttackState:
         """Shift the formation down and detach its lone bottom split demon."""
@@ -1007,7 +1015,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         demon or a split demon with at least one surviving half, and its
         post-spawn pause has elapsed.
         """
-        ids = jnp.arange(self.consts.DEMON_SLOTS)
+        ids = self._demon_slot_ids()
         lowest = ids == self.consts.MAX_DEMONS - 1
         active = jnp.logical_or(
             state.demon_status == DEMON_STATUS_NORMAL,
@@ -1083,11 +1091,15 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         Only the lowest slot is eligible. Only a small (split) demon may dive,
         and only once its sibling half has died.
         """
-        ids = jnp.arange(self.consts.DEMON_SLOTS)
-        lowest = jnp.logical_or(
-            ids == self.consts.MAX_DEMONS - 1,
-            ids == self.consts.DEMON_SLOTS - 1,
-        )
+        ids = self._demon_slot_ids()
+        bottom_slot = self.consts.MAX_DEMONS - 1
+        overflow_slot = self.consts.DEMON_SLOTS - 1
+        # The overflow demon is physically below the formation and therefore
+        # has priority. This also prevents a second lone split demon in the
+        # formation from starting a concurrent dive while overflow is occupied.
+        overflow_occupied = state.demon_status[overflow_slot] != DEMON_STATUS_FREE
+        lowest_slot = jnp.where(overflow_occupied, overflow_slot, bottom_slot)
+        lowest = ids == lowest_slot
         is_small = self._is_small_demon_status(state.demon_status)
         lone_survivor = jnp.logical_xor(
             state.demon_split_primary_alive, state.demon_split_secondary_alive
@@ -1277,7 +1289,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             operand=state,
         )
         state = state.replace(demon_random=self._next_demon_random(state.demon_random))
-        ids = jnp.arange(self.consts.DEMON_SLOTS)
+        ids = self._demon_slot_ids()
         frame_mod4 = state.step_counter & 3
         selected = jnp.maximum(frame_mod4 - 1, 0)
 
