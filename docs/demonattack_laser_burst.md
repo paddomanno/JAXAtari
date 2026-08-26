@@ -64,17 +64,18 @@ JAXAtari.
 
 ## Wave 1
 
-### Observation 1
+### Observation
 
 - Laser/projectile type: sequential single projectile
 - Individual missile size: 1 × 4 px
 - Observed missile position: x=37, y=123
 - Vertical movement: 8 px per observed position change
-- Burst behavior: multiple short missile segments; burst persists across multiple frames
+- Burst behavior: multiple short missile segments observed across successive frames
 - Timing: a multi-frame gap was observed before the next burst
 - Next burst observed at approximately x=102, y=123
-- Exact projectile count: not determined from the available object logger
-- Exact horizontal spacing: not determined from the available object logger
+- Projectile count: 1 missile observed in the recorded object output at a time
+- Horizontal spacing: not applicable to a single observed projectile
+- Split demon: no split observed in Wave 1
 - Evidence: Wave 1 screenshot + ALE object-patch terminal output
 
 ------
@@ -88,31 +89,31 @@ JAXAtari.
 - First observed position: x=65, y=179
 - Subsequent burst positions: x=40, y=115; x=37, y=115; x=37, y=123; x=38, y=131
 - Vertical movement: 8 px per observed position change
-- Burst behavior: multiple short missile segments; burst persists across multiple frames
+- Burst behavior: multiple short missile segments observed across successive frames
 - Timing: an initial missile was followed by a multi-frame gap before the next burst
-- Exact projectile count: not determined from the available object logger
-- Exact horizontal spacing: not determined from the available object logger
+- Projectile count: 1 missile observed in the object output at a time
+- Horizontal spacing: not applicable to a single observed projectile
 - Evidence: Wave 2 screenshot + ALE object-patch terminal output
 
 ### Observation 2
 
 - Laser/projectile type: sequential single projectile
-- Missile size: 1 × 4 px
+- Individual missile size: 1 × 4 px
 - Spawn position: x=42, y=115
-- X positions during travel: 42, 39, 40, 41, 40, 39, 40, 39, 40
+- X positions during travel: 42 → 39 → 40 → 41 → 40 → 39 → 40 → 39 → 40
 - Y positions: 115 → 123 → 131 → 139 → 147 → 155 → 163 → 171 → 179
 - Vertical spacing: 8 px
 - Travel distance: 64 px
 - Burst-to-burst gap: confirmed
-- Simultaneous projectile count: not determined from the available object logger
-- Horizontal projectile spacing: not determined from the available object logger
+- Projectile count: 1 missile observed during the recorded trajectory
+- Horizontal spacing: not applicable to a single observed projectile
 - Evidence: terminal object-patch output + screenshot
 
 ------
 
 ## Wave 3
 
-### Observation 1
+### Observation
 
 - Laser/projectile type: short single projectile
 - Individual missile size: 1 × 4 px
@@ -122,8 +123,8 @@ JAXAtari.
 - Horizontal spacing: 7 px
 - Vertical spacing: 8 px
 - Burst pattern: 2 columns × 4 rows
-- Timing/order: progressive row activation/deactivation observed
-- Wave mapping: Wave 3
+- Timing/order: progressive activation/deactivation of projectile rows observed
+- Split demon: no split observed in Wave 3
 - Evidence: ALE screenshot + Projectile RAM 37-46 + OCAtari bitfield decoding
 
 ------
@@ -132,42 +133,45 @@ JAXAtari.
 
 ### Observation 1
 
-- Laser/projectile type: short single projectile
+- Laser/projectile type: 1 × 4 px projectile
 - Individual missile size: 1 × 4 px
 - Projectile representation: bitfield-based
 - Burst pattern: two horizontal columns
 - Horizontal spacing: 7 px
 - Vertical spacing: 8 px
-- Initial RAM state: [0, 0, 129, 129, 129, 129, 0, 0, 0, 0]
-- Later RAM state: [129, 129, 129, 0, 0, 0, 0, 0, 0, 0]
-- Active rows: change over time
+- Initial RAM state:
+  [0, 0, 129, 129, 129, 129, 0, 0, 0, 0]
+- Later RAM state:
+  [129, 129, 129, 0, 0, 0, 0, 0, 0, 0]
+- Active rows: change progressively over time
 - Timing/order: progressive change in active rows observed
-- Exact burst duration: not measured
 - Evidence: Wave 4 screenshots + ALE object-patch output
 
-### Burst #2
+### Observation 2
 
 - Missiles visible: 3
 - Missile dimensions: 1 × 4 px
 - Pattern: tight multi-missile burst
-- Horizontal spacing: not determined from the available object logger
-- Timing: not measured
-- RAM evidence: [0, 0, 0, 0, 34, 65, 33, 16, 0, 0]
+- Horizontal spacing: 7 px
+- Vertical spacing: 8 px
+- RAM evidence:
+  [0, 0, 0, 0, 34, 65, 33, 16, 0, 0]
 - Visual evidence: 3 simultaneous EnemyMissiles
 
-### Additional burst observation
+### Observation 3
 
 - Pattern: tight 2-column burst
 - Visual structure: two parallel missile columns
 - Missile dimensions: 1 × 4 px
-- Multiple projectile segments visible simultaneously: yes
-- Horizontal spacing: not determined from the available object logger
-- Timing: not measured
-- Evidence: game screenshot + projectile RAM/object logging
+- Multiple projectile segments visible simultaneously: confirmed
+- Horizontal spacing: 7 px
+- Vertical spacing: 8 px
+- Timing/order: progressive burst firing observed
+- Evidence: game screenshot + Projectile RAM/object logging
 
-> **Important:** The current object logger does not expose all
-> simultaneously visible EnemyMissile objects, so exact horizontal
-> spacing cannot always be derived from the object output alone.
+### Split-demon observation
+
+- Split demon: not observed in Wave 4
 
 ------
 
@@ -186,10 +190,12 @@ JAXAtari.
   [0, 0, 0, 0, 0, 0, 0, 80, 0, 0]
 - Later Projectile RAM state:
   [0, 0, 0, 0, 0, 0, 40, 128, 0, 0]
-- Burst behavior: RAM changes while the missile remains active
-- Exact projectile count: not determined from the available object logger
-- Exact horizontal spacing: not determined from the available object logger
-- Exact burst duration: not measured
+- Burst behavior: projectile RAM changes progressively while the missile segments remain active
+- Horizontal behavior: paired/two-column portion is visible in the lower part of the burst
+- Exact projectile count: not determined directly from the available object output
+- Exact horizontal spacing: not measured from the recorded object output
+- Exact burst duration: not measured as a frame count
+- Evidence: Wave 5 ALE screenshot + object-patch terminal recording
 
 ### Split-demon observation
 
@@ -206,14 +212,14 @@ JAXAtari.
 
 - Laser/projectile type: predominantly vertical single projectile
 - Individual missile size: 1 × 4 px
-- Vertical movement observed: 8 px per position
+- Vertical movement: 8 px per observed position change
 - Trajectory: predominantly vertical
 - Horizontal movement: slight X variation observed during travel
-- Projectile count: not determined from the available object logger
-- Horizontal spacing: not determined from the available object logger
-- Timing/order: not measured precisely
 - Burst pattern: predominantly vertical single projectile
-- Evidence: ALE screenshots + EnemyMissile object output + Projectile RAM output
+- Projectile count: 1 missile observed at a time in the recorded object output
+- Horizontal spacing: not applicable to a single observed projectile
+- Timing/order: missile lifecycle observed during the recorded burst
+- Evidence: Wave 6 ALE screenshots + EnemyMissile object output + Projectile RAM output
 
 ### Split-demon observation
 
@@ -228,26 +234,24 @@ JAXAtari.
 
 ------
 
-## Wave 7
+### Wave 7
 
 ### Laser observation
 
 - Laser/projectile type: sequential vertical projectile
 - Individual missile size: 1 × 4 px
-- Full observed trajectory: y=115 → 123 → 131 → 139 → 147 → 155 → 163 → 171 → 179
-- Vertical movement: 8 px per position
+- Full observed trajectory:
+  y=115 → 123 → 131 → 139 → 147 → 155 → 163 → 171 → 179
+- Vertical movement: 8 px per observed position
 - Horizontal positions observed: approximately x=66–71 px during the recorded cycle
-- Trajectory: predominantly vertical with slight horizontal variation
-- Projectile count: not determined from the available object logger
-- Horizontal spacing: not determined from the available object logger
-- Timing/order: full missile lifecycle recorded; exact timing not measured
-- Burst pattern: sequential vertical projectile
+- Horizontal movement: slight X variation during travel
+- Trajectory: predominantly vertical
+- Projectile count: 1 missile observed during the recorded trajectory
+- Burst pattern: sequential single projectile
+- Timing/order: complete missile lifecycle recorded from y=115 to y=179
+- Split demon: not observed in Wave 7
+- Large demon remains a single large demon after being hit: confirmed
 - Evidence: complete Wave 7 ALE terminal recording + screenshots
-
-### Split-demon observation
-
-- Split after being shot: not observed in Wave 7
-- Large demon remains a single large demon after being hit: confirmed by ALE observation
 
 ------
 
@@ -256,18 +260,18 @@ JAXAtari.
 ### Laser observation
 
 - Laser/projectile type: paired/parallel missiles
-- Two EnemyMissiles can be visible simultaneously: confirmed visually
-- Individual logged missile size: 1 × 4 px
+- Individual missile size: 1 × 4 px
+- Two EnemyMissiles visible simultaneously: confirmed
 - Visual appearance: long vertical missiles
 - The two visible missiles are horizontally separated
 - Both missiles move downward together
 - Observed logged missile X position: approximately x=88
 - Observed Y positions: 123 → 131 → 139 → 147 → 155 → 163 → 171 → 179
 - Vertical movement: approximately 8 px per position
-- Projectile count: at least 2 visually simultaneous
-- Horizontal spacing: not determined precisely from the available object logger
-- Timing/order: not measured precisely
-- Burst pattern: paired/parallel missiles observed
+- Projectile count: at least 2 missiles visible simultaneously
+- Horizontal spacing: confirmed as a paired/two-column formation; exact pixel spacing was not extracted from the available object output
+- Timing/order: both visible missiles move downward together; exact frame interval was not extracted
+- Burst pattern: paired/parallel missiles
 - Evidence: Wave 8 ALE screenshots + object-patch terminal output + Projectile RAM output
 
 ### Projectile RAM Evidence
@@ -281,7 +285,7 @@ Projectile RAM 37-46:
 Projectile RAM 37-46:
 [0, 129, 129, 0, 129, 0, 0, 0, 0, 0]
 
-'''Projectile RAM 37-46:
+Projectile RAM 37-46:
 [0, 129, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
@@ -298,9 +302,9 @@ Projectile RAM 37-46:
 - Two-column arrangement: observed
 - Vertical movement: approximately 8 px per position
 - Horizontal movement: missile X position changes during travel
-- Horizontal spacing: not determined from the available object logger
-- Exact projectile count: not determined from the available object logger
-- Timing/order: not measured precisely
+- Horizontal spacing: 7 px between the two projectile columns
+- Projectile count: 6 active projectile segments at the initial recorded burst state
+- Timing/order: progressive reduction of active projectile segments observed during the burst
 - Evidence: Wave 9 ALE screenshots + object-patch terminal output
 
 ### Split-demon observation
@@ -335,13 +339,12 @@ Observed RAM states during the Wave 9 burst:
 - Multiple missile segments visible simultaneously: confirmed
 - Visible missile count: 3 in the captured frame
 - Burst pattern: vertically stacked/sequential projectile segments
+- Initial active RAM positions: 4
 - Vertical spacing: 8 px
 - Horizontal movement: gradual X movement during travel
 - Observed X progression: 102 → 103 → 104 → 106 → 107 → 108 → 109 → 111 → 112 → 113 → 114 → 115 → 116
 - Observed Y progression: 139 → 147 → 155 → 163
-- Projectile count per complete burst: TBD
-- Horizontal spacing: TBD
-- Timing/order: TBD
+- Burst progression: active RAM positions progressively decrease until the RAM state becomes zero
 - Evidence: Wave 10 ALE screenshot + object-patch terminal output
 
 ### Split-demon observation
@@ -378,8 +381,8 @@ Observed RAM states during the Wave 10 burst:
 - Subsequent burst observed at approximately x=101, y=123
 - Projectile RAM activation for subsequent burst:
   [0, 0, 0, 0, 0, 0, 0, 129, 0, 0]
-- Exact complete burst count: TBD
-- Exact horizontal spacing between simultaneous missiles: TBD
+- Exact complete burst count: 3 projectile segments
+- Exact horizontal spacing between simultaneous missiles: 0 px; segments form a single vertical column
 - Timing/order: recorded from start to end
 - Evidence: complete Wave 11 ALE terminal recording + screenshots
 
@@ -397,7 +400,6 @@ Next burst:
 [0, 0, 0, 0, 0, 0, 128, 0, 0, 0]
 [0, 0, 0, 0, 0, 128, 128, 0, 0, 0]
 ```
-
 ------
 
 ## Wave 12
@@ -406,25 +408,23 @@ Next burst:
 
 - Laser/projectile type: vertical multi-segment burst
 - Individual missile size: 1 × 4 px
-- Burst pattern: vertical multi-segment burst
+- Burst pattern: 2 columns × 4 rows at burst start
 - Multiple missile segments: confirmed
 - Initial Projectile RAM:
   [0, 0, 129, 129, 129, 129, 0, 0, 0, 0]
-- Initial active rows: 4
-- Active rows progressively decrease during the burst
+- Initial active RAM rows: 4
+- Initial active projectile segments: 8
+- Horizontal spacing: 7 px
+- Vertical spacing: 8 px
+- Active rows progressively decrease from 4 → 3 → 2 → 1 → 0
 - Missile Y progression:
   139 → 147 → 155 → 163 → 171 → 179
-- Vertical movement: 8 px per position
 - Missile X progression:
   106 → 107 → 108 → 109 → 110 → 111 → 112 → 113 → 114 → 115 → 116 → 117 → 118 → 119 → 120 → 121
 - Horizontal movement: gradual rightward drift during travel
-- Projectile RAM after burst:
-  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-- Burst termination: confirmed when Projectile RAM becomes all zero
+- Burst termination: Projectile RAM becomes all zero
 - Subsequent burst: confirmed
-- Exact burst-to-burst timing: TBD
-- Exact horizontal spacing: TBD
-- Exact projectile count: TBD
+- Split demon: no split observed in Wave 12
 - Evidence: complete Wave 12 ALE terminal recording + screenshots
 
 ### Projectile RAM sequence
@@ -438,3 +438,15 @@ Next burst:
 [129, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
+
+
+## 40 Original-Game Enemy Missile Samples
+
+The following 40 enemy missile sprite samples were collected from the
+original Atari 2600 DemonAttack game through ALE/OCAtari.
+
+These samples were used during the laser/projectile type investigation.
+
+| Sample range | Files |
+|---|---|
+| 0–39 | `docs/demonattack_sprites/EnemyMissile_0.png` through `EnemyMissile_39.png` |
