@@ -450,3 +450,12 @@ These samples were used during the laser/projectile type investigation.
 | Sample range | Files |
 |---|---|
 | 0–39 | `docs/demonattack_sprites/EnemyMissile_0.png` through `EnemyMissile_39.png` |
+
+## ALE Evidence Screenshots
+
+The `docs/demonattack_evidence/` directory contains the 44 screenshots
+captured during the ALE/OCAtari investigation of the original Atari
+2600 DemonAttack game.
+
+These screenshots provide the visual evidence for the Wave 1–12
+projectile, burst, RAM, and split-demon observations documented above.
