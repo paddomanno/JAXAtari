@@ -345,7 +345,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     LONG_BOMB_BURST_X_OFFSETS: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(0,),
+        default=(-4, 4),
     )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
@@ -627,7 +627,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     ) -> chex.Array:
         return jnp.where(
             bomb_type == BOMB_TYPE_LONG,
-            self.consts.MAX_BOMBS,
+            2,
             random_burst_length,
         )
 
