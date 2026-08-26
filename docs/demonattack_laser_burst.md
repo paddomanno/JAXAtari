@@ -2,20 +2,20 @@
 
 ## Wave-by-Wave Burst Mapping
 
-| Wave | Burst behavior | Split demon |
-|---|---|---|
-| 1 | Sequential single projectile | No |
-| 2 | Sequential single projectile | No |
-| 3 | 2 columns × 4 rows | No |
-| 4 | Tight multi-projectile / 2-column burst | No |
-| 5 | Multi-segment burst with paired/two-column portion | Yes |
-| 6 | Predominantly vertical single projectile | Yes |
-| 7 | Sequential vertical projectile | No |
-| 8 | Paired/parallel missiles | No |
-| 9 | Multi-projectile / 2-column burst | Yes |
-| 10 | Vertically stacked multi-segment burst | Yes |
-| 11 | Sequential multi-segment burst | No |
-| 12 | Vertical multi-segment burst | No |
+| Gameplay wave | ALE index | Burst behavior | Split demon |
+|---|---|---|---|
+| 1 | 0 | Sequential single projectile | No |
+| 2 | 1 | Sequential single projectile | No |
+| 3 | 2 | 2 columns × 4 rows | No |
+| 4 | 3 | Tight multi-projectile / 2-column burst | No |
+| 5 | 4 | Multi-segment burst with paired/two-column portion | Yes |
+| 6 | 5 | Predominantly vertical single projectile | Yes |
+| 7 | 6 | Sequential vertical projectile | No |
+| 8 | 7 | Paired/parallel missiles | No |
+| 9 | 8 | Multi-projectile / 2-column burst | Yes |
+| 10 | 9 | Vertically stacked multi-segment burst | Yes |
+| 11 | 10 | Sequential multi-segment burst | No |
+| 12 | 11 | Vertical multi-segment burst | No |
 
 ## Reference
 
