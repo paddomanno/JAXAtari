@@ -624,7 +624,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _bomb_burst_length_for_type(
         self, bomb_type: chex.Array, random_burst_length: chex.Array
     ) -> chex.Array:
-        return jnp.where(bomb_type == BOMB_TYPE_LONG, 2, random_burst_length)
+        return jnp.where(
+            bomb_type == BOMB_TYPE_LONG,
+            2,
+            random_burst_length,
+        )
 
     def _bomb_jitter_for_type(
         self, bomb_type: chex.Array, standard_jitter_x: chex.Array
@@ -1820,9 +1824,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             burst_step,
             self.consts.BOMB_BURST_RATES - 1,
         )
-        rate_by_slot = jnp.asarray(
+        base_rate_by_slot = jnp.asarray(
             self.consts.BOMB_BURST_RATE_BY_SLOT,
             dtype=jnp.int32,
+        )
+        long_rate_by_slot = jnp.asarray(
+            (0, 1, 1, 2, 2, 3, 3),
+            dtype=jnp.int32,
+        )
+        rate_by_slot = jnp.where(
+            bomb_type == BOMB_TYPE_LONG,
+            long_rate_by_slot,
+            base_rate_by_slot,
         )
         last_active_rate = rate_by_slot[jnp.maximum(active_burst_length - 1, 0)]
         burst_in_progress = burst_step <= last_active_rate
