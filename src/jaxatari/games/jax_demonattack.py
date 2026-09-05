@@ -28,6 +28,9 @@ SPLIT_DEATH_PRIMARY = 1
 SPLIT_DEATH_SECONDARY = 2
 BOMB_TYPE_STANDARD = 0
 BOMB_TYPE_LONG = 1
+BOMB_TYPE_TIGHT = 2      # new — not yet reachable from any wave table
+BOMB_TYPE_SNAKE = 3      # new — not yet reachable from any wave table
+NUM_BOMB_TYPES = 4
 DIFFICULTY_TABLE_NAMES = (
     "ENEMY_SHOT_SPEED_TABLE",
     "WAVE_LASER_SPEED_TABLE",
@@ -197,25 +200,10 @@ def _get_default_asset_config() -> tuple:
 
 def _bomb_visible_repeat_window(state, consts, bomb_type):
     """Return visible repeat count and leading-repeat offset for enemy shots."""
+    unit_length = jnp.asarray(consts.BOMB_TYPE_UNIT_LENGTH, dtype=jnp.int32)[bomb_type]
     fallen_repeats = (state.bomb_y - state.bomb_spawn_y) // consts.BOMB_SIZE[0]
-    visible_repeats = jnp.where(
-        bomb_type == BOMB_TYPE_LONG,
-        jnp.clip(
-            fallen_repeats + 1,
-            1,
-            consts.LONG_BOMB_HEIGHT_MULTIPLIER,
-        ),
-        1,
-    )
-    repeat_offset = jnp.where(
-        bomb_type == BOMB_TYPE_LONG,
-        jnp.clip(
-            fallen_repeats,
-            0,
-            consts.LONG_BOMB_HEIGHT_MULTIPLIER - 1,
-        ),
-        0,
-    )
+    visible_repeats = jnp.clip(fallen_repeats + 1, 1, unit_length)
+    repeat_offset = jnp.clip(fallen_repeats, 0, unit_length - 1)
     return visible_repeats, repeat_offset
 
 class DemonAttackConstants(AutoDerivedConstants):
@@ -304,6 +292,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     PLAYER_LASER_DEPTH: int = struct.field(pytree_node=False, default=1)
     PLAYER_DEATH_ANIMATION_DURATION: int = struct.field(pytree_node=False, default=70)
     PLAYER_DEATH_FLASH_DURATION: int = struct.field(pytree_node=False, default=20)
+
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
@@ -334,6 +323,46 @@ class DemonAttackConstants(AutoDerivedConstants):
         default=(-3, 0, 0, 6, 0, 0, 6, 0, 0),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
+
+    # Per-bomb-type static geometry, indexed by bomb type (STANDARD, LONG, TIGHT, SNAKE).
+    # TIGHT and SNAKE entries below are placeholders reserved for later steps and
+    # are not yet reachable from any wave-selection table — they don't change
+    # current behavior.
+    BOMB_TYPE_COLUMN_COUNT: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(2, 2, 2, 1),
+    )
+    # One row of x-offsets per bomb type, padded to MAX_BOMBS. STANDARD/LONG rows
+    # reproduce today's BOMB_BURST_X_OFFSETS / LONG_BOMB_BURST_X_OFFSETS exactly.
+    BOMB_TYPE_X_OFFSETS: Tuple[Tuple[int, ...], ...] = struct.field(
+        pytree_node=False,
+        default=(
+            (-2, 2, -2, 2, -2, 2, -1),  # STANDARD
+            (-4, 4, 0, 0, 0, 0, 0),     # LONG (padded, matches old jnp.pad result)
+            (-1, 1, -1, 1, -1, 1, 0),   # TIGHT (placeholder)
+            (0, 0, 0, 0, 0, 0, 0),      # SNAKE (placeholder)
+        ),
+    )
+    # Whether this bomb type applies BOMB_JITTER_X_TABLE at all.
+    BOMB_TYPE_HAS_JITTER: Tuple[bool, ...] = struct.field(
+        pytree_node=False,
+        default=(True, False, True, True),
+    )
+    # Fixed number of bomb slots fired per burst for this type; 0 means "not
+    # fixed", i.e. use the randomized BOMB_BURST_LENGTH_OPTIONS draw instead.
+    # LONG stays fixed at 2 (one per column).
+    BOMB_TYPE_FIXED_BURST_LENGTH: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(0, 2, 0, 0),
+    )
+    # Sprite-height "unit length" consumed by the falling-distance repeat window
+    # and by _bomb_height_for_wave. Computed in compute_derived so LONG's entry
+    # stays tied to LONG_BOMB_HEIGHT_MULTIPLIER (single source of truth).
+    BOMB_TYPE_UNIT_LENGTH: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=None,
+    )
+
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
     INIT_BUNKERS: int = struct.field(pytree_node=False, default=3)
     BUNKER_X: int = struct.field(pytree_node=False, default=17)
@@ -358,6 +387,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         return {
             'PLAYER_MAX_X': self.WIDTH - self.BOUNDARY,
             'DEMON_MAX_X': self.WIDTH - self.BOUNDARY,
+            'BOMB_TYPE_UNIT_LENGTH': (1, self.LONG_BOMB_HEIGHT_MULTIPLIER, 1, 2),
         }
 
 class DemonAttackState(struct.PyTreeNode):
@@ -455,6 +485,23 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             raise ValueError(
                 f"Difficulty tables need {expected_difficulty_entries} entries: "
                 f"{', '.join(invalid_tables)}"
+            )
+        per_type_tables = [
+            "BOMB_TYPE_COLUMN_COUNT",
+            "BOMB_TYPE_X_OFFSETS",
+            "BOMB_TYPE_HAS_JITTER",
+            "BOMB_TYPE_FIXED_BURST_LENGTH",
+            "BOMB_TYPE_UNIT_LENGTH",
+        ]
+        invalid_per_type_tables = [
+            name
+            for name in per_type_tables
+            if len(getattr(consts, name)) != NUM_BOMB_TYPES
+        ]
+        if invalid_per_type_tables:
+            raise ValueError(
+                f"Per-bomb-type tables need {NUM_BOMB_TYPES} entries: "
+                f"{', '.join(invalid_per_type_tables)}"
             )
         if len(consts.WAVE_DEMON_TABLE) != INITIAL_WAVE_PATTERNS:
             raise ValueError(
@@ -600,11 +647,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return self._bomb_type_for_wave(wave_pattern) == BOMB_TYPE_LONG
 
     def _bomb_height_for_wave(self, wave_pattern: chex.Array) -> chex.Array:
-        return jnp.where(
-            self._uses_long_bombs(wave_pattern),
-            self.consts.BOMB_SIZE[0] * self.consts.LONG_BOMB_HEIGHT_MULTIPLIER,
-            self.consts.BOMB_SIZE[0],
-        )
+        bomb_type = self._bomb_type_for_wave(wave_pattern)
+        unit_length = jnp.asarray(self.consts.BOMB_TYPE_UNIT_LENGTH, dtype=jnp.int32)[
+            bomb_type
+        ]
+        return self.consts.BOMB_SIZE[0] * unit_length
 
     def _bomb_visible_repeat_window(
         self, state: DemonAttackState
@@ -624,34 +671,26 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
     def _bomb_burst_length_for_type(
         self, bomb_type: chex.Array, random_burst_length: chex.Array
     ) -> chex.Array:
-        return jnp.where(bomb_type == BOMB_TYPE_LONG, 2, random_burst_length)
+        fixed_lengths = jnp.asarray(
+            self.consts.BOMB_TYPE_FIXED_BURST_LENGTH, dtype=jnp.int32
+        )
+        fixed_length = fixed_lengths[bomb_type]
+        return jnp.where(fixed_length > 0, fixed_length, random_burst_length)
 
     def _bomb_jitter_for_type(
         self, bomb_type: chex.Array, standard_jitter_x: chex.Array
     ) -> chex.Array:
-        return jnp.where(bomb_type == BOMB_TYPE_LONG, 0, standard_jitter_x)
+        has_jitter = jnp.asarray(
+            self.consts.BOMB_TYPE_HAS_JITTER, dtype=jnp.bool_
+        )[bomb_type]
+        return jnp.where(has_jitter, standard_jitter_x, 0)
 
     def _bomb_x_offsets_for_type(self, bomb_type: chex.Array) -> chex.Array:
-        standard_offsets = jnp.asarray(
-            self.consts.BOMB_BURST_X_OFFSETS,
-            dtype=jnp.int32,
-        )
-        long_offsets = jnp.asarray(
-            self.consts.LONG_BOMB_BURST_X_OFFSETS,
-            dtype=jnp.int32,
-        )
-        long_offsets = jnp.pad(
-            long_offsets,
-            (0, self.consts.MAX_BOMBS - len(self.consts.LONG_BOMB_BURST_X_OFFSETS)),
-        )
-        return jnp.where(bomb_type == BOMB_TYPE_LONG, long_offsets, standard_offsets)
+        offsets_by_type = jnp.asarray(self.consts.BOMB_TYPE_X_OFFSETS, dtype=jnp.int32)
+        return offsets_by_type[bomb_type]
 
     def _bomb_sprite_repeats_for_type(self, bomb_type: chex.Array) -> chex.Array:
-        return jnp.where(
-            bomb_type == BOMB_TYPE_LONG,
-            self.consts.LONG_BOMB_HEIGHT_MULTIPLIER,
-            1,
-        )
+        return jnp.asarray(self.consts.BOMB_TYPE_UNIT_LENGTH, dtype=jnp.int32)[bomb_type]
 
     def _spawn_target_x(self, ids: chex.Array) -> chex.Array:
         """Return evenly spaced spawn x positions for demon slot ids."""
