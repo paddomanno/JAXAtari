@@ -36,6 +36,7 @@ DIFFICULTY_TABLE_NAMES = (
     "WAVE_LASER_SPEED_TABLE",
     "WAVE_BIG_DEMON_BOMB_TYPE_TABLE",
     "WAVE_SMALL_DEMON_BOMB_TYPE_TABLE",
+    "WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE",
 )
 
 def _get_default_asset_config() -> tuple:
@@ -308,10 +309,6 @@ class DemonAttackConstants(AutoDerivedConstants):
     MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
     BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
     BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=20)
-    BOMB_BURST_LENGTH_OPTIONS: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(1, 3, 5, 7),
-    )
     # Assign the seven bomb slots to four timed volleys: 2 + 2 + 2 + 1.
     BOMB_BURST_RATE_BY_SLOT: Tuple[int, ...] = struct.field(
         pytree_node=False,
@@ -333,7 +330,7 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(-3, 0, 0, 6, 0, 0, 6, 0, 0),
     )
-    LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=5)
+    LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=3)
 
     # Per-bomb-type static geometry, indexed by bomb type (STANDARD, LONG, TIGHT, SNAKE).
     # TIGHT and SNAKE entries below are placeholders reserved for later steps and
@@ -343,13 +340,20 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(2, 2, 2, 1),
     )
+    # Whether a row of this type may fire with only one of its two columns
+    # active (chosen randomly, excluding "neither" — that's reserved for the
+    # dedicated empty-row mechanism). Only meaningful for 2-column types.
+    BOMB_TYPE_ALLOWS_PARTIAL_ROWS: Tuple[bool, ...] = struct.field(
+        pytree_node=False,
+        default=(True, False, True, False),  # STANDARD, LONG, TIGHT, SNAKE
+    )
     # One row of x-offsets per bomb type, padded to MAX_BOMBS. STANDARD/LONG rows
     # reproduce today's BOMB_BURST_X_OFFSETS / LONG_BOMB_BURST_X_OFFSETS exactly.
     BOMB_TYPE_X_OFFSETS: Tuple[Tuple[int, ...], ...] = struct.field(
         pytree_node=False,
         default=(
             (-2, 2, -2, 2, -2, 2, -1),  # STANDARD
-            (-4, 4, 0, 0, 0, 0, 0),     # LONG (padded, matches old jnp.pad result)
+            (-4, 4, -4, 4, -4, 4, -4),  # LONG — tiled, was zero-padded past slot 1
             (-1, 1, -1, 1, -1, 1, 0),   # TIGHT (placeholder)
             (0, 0, 0, 0, 0, 0, 0),      # SNAKE (placeholder)
         ),
@@ -359,18 +363,31 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(True, False, True, True),
     )
-    # Fixed number of bomb slots fired per burst for this type; 0 means "not
-    # fixed", i.e. use the randomized BOMB_BURST_LENGTH_OPTIONS draw instead.
-    # LONG stays fixed at 2 (one per column).
-    BOMB_TYPE_FIXED_BURST_LENGTH: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(0, 2, 0, 0),
-    )
     # Sprite-height "unit length" (how tall each bomb is measured in length of the laser sprite).
     # Computed in compute_derived so LONG's entry so it stays tied to LONG_BOMB_HEIGHT_MULTIPLIER (single source of truth).
     BOMB_TYPE_UNIT_LENGTH: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=None,
+    )
+    # Row/segment count range per bomb type, as (min, max) inclusive. Used
+    # directly for LONG/TIGHT/SNAKE (fixed regardless of wave); STANDARD's
+    # entry here is an unused placeholder — its range is wave-dependent via
+    # WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE below.
+    BOMB_TYPE_ROW_RANGE: Tuple[Tuple[int, int], ...] = struct.field(
+        pytree_node=False,
+        default=(
+            (2, 4),  # STANDARD (placeholder, overridden per-wave)
+            (3, 4),  # LONG — "always 3-4 segments"
+            (2, 6),  # TIGHT — "always 2-6 rows"
+            (3, 4),  # SNAKE — "always 3-4 segments"
+        ),
+    )
+    # STANDARD row-count range per difficulty index (waves 0-1, 2-3, 4-5, 6-7,
+    # 8-9, 10-11; pattern repeats from index 4). Entries at LONG-wave indices
+    # (1, 3, 5) are unused placeholders.
+    WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE: Tuple[Tuple[int, int], ...] = struct.field(
+        pytree_node=False,
+        default=((2, 4), (0, 0), (2, 5), (0, 0), (2, 6), (0, 0)),
     )
 
     MAX_BUNKERS: int = struct.field(pytree_node=False, default=6)
@@ -435,6 +452,7 @@ class DemonAttackState(struct.PyTreeNode):
     bomb_y: chex.Array
     bomb_spawn_y: chex.Array
     bomb_active: chex.Array
+    bomb_column_active: chex.Array  # fixed mask which columns are active for the current burst
     bomb_type: chex.Array
     bomb_source_idx: chex.Array
     bomb_burst_step: chex.Array
@@ -501,7 +519,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             "BOMB_TYPE_COLUMN_COUNT",
             "BOMB_TYPE_X_OFFSETS",
             "BOMB_TYPE_HAS_JITTER",
-            "BOMB_TYPE_FIXED_BURST_LENGTH",
+            "BOMB_TYPE_ROW_RANGE",
             "BOMB_TYPE_UNIT_LENGTH",
         ]
         invalid_per_type_tables = [
@@ -596,6 +614,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_spawn_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
+            bomb_column_active=jnp.ones((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_type=jnp.array(BOMB_TYPE_STANDARD, dtype=jnp.int32),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
             bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
@@ -669,14 +688,73 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         bomb_bottom = bomb_top + visible_repeats * self.consts.BOMB_SIZE[0]
         return bomb_top, bomb_bottom
 
-    def _bomb_burst_length_for_type(
-        self, bomb_type: chex.Array, random_burst_length: chex.Array
-    ) -> chex.Array:
-        fixed_lengths = jnp.asarray(
-            self.consts.BOMB_TYPE_FIXED_BURST_LENGTH, dtype=jnp.int32
+    def _row_count_range(
+        self, bomb_type: chex.Array, wave_pattern: chex.Array
+    ) -> Tuple[chex.Array, chex.Array]:
+        """Return (min_rows, max_rows) for a burst of this type, on this wave.
+
+        Every type except STANDARD uses a fixed range regardless of wave.
+        STANDARD's range instead depends on the wave's difficulty index.
+        """
+        fixed_ranges = jnp.asarray(self.consts.BOMB_TYPE_ROW_RANGE, dtype=jnp.int32)
+        fixed_min = fixed_ranges[bomb_type, 0]
+        fixed_max = fixed_ranges[bomb_type, 1]
+
+        standard_ranges = jnp.asarray(
+            self.consts.WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE, dtype=jnp.int32
         )
-        fixed_length = fixed_lengths[bomb_type]
-        return jnp.where(fixed_length > 0, fixed_length, random_burst_length)
+        difficulty_index = jnp.clip(
+            self._difficulty_index_for_pattern(wave_pattern),
+            0,
+            standard_ranges.shape[0] - 1,
+        )
+        standard_min = standard_ranges[difficulty_index, 0]
+        standard_max = standard_ranges[difficulty_index, 1]
+
+        is_standard = bomb_type == BOMB_TYPE_STANDARD
+        min_rows = jnp.where(is_standard, standard_min, fixed_min)
+        max_rows = jnp.where(is_standard, standard_max, fixed_max)
+        return min_rows, max_rows
+
+    def _bomb_row_column_mask(
+        self,
+        key: chex.PRNGKey,
+        bomb_type: chex.Array,
+    ) -> chex.Array:
+        """Per-slot mask deciding which column(s) of each row fire.
+
+        Draws one pattern per BOMB_BURST_RATE_BY_SLOT rate-group — left-only,
+        right-only, or both — never "neither"; a fully inactive row is only
+        ever produced by the dedicated empty-row mechanism, not here. Types
+        that don't allow partial rows (LONG, SNAKE) always report every slot
+        active, so their bursts are unaffected.
+        """
+        rate_by_slot = jnp.asarray(self.consts.BOMB_BURST_RATE_BY_SLOT, dtype=jnp.int32)
+        column_count = jnp.asarray(self.consts.BOMB_TYPE_COLUMN_COUNT, dtype=jnp.int32)[
+            bomb_type
+        ]
+        allows_partial = jnp.asarray(
+            self.consts.BOMB_TYPE_ALLOWS_PARTIAL_ROWS, dtype=jnp.bool_
+        )[bomb_type]
+
+        # 1=left only, 2=right only, 3=both, drawn per rate-group (row).
+        patterns = jax.random.randint(
+            key, (self.consts.BOMB_BURST_RATES,), 1, 4, dtype=jnp.int32
+        )
+        # The final rate-group only ever contains a single physical slot (the
+        # MAX_BOMBS-odd leftover, e.g. slot 6 of 7) rather than a true left/right
+        # pair, so it has no meaningful "partial" state — always force "both"
+        # so that lone slot is never masked off by an unrelated draw.
+        patterns = patterns.at[self.consts.BOMB_BURST_RATES - 1].set(3)
+
+        slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
+        slot_position = jnp.where(column_count > 1, slot_ids % column_count, 0)
+        row_pattern = patterns[rate_by_slot[slot_ids]]
+        bit = jnp.where(slot_position == 0, 1, 2)
+        column_active = (row_pattern & bit) > 0
+
+        is_pairable = column_count > 1
+        return jnp.where(jnp.logical_and(allows_partial, is_pairable), column_active, True)
 
     def _bomb_jitter_for_type(
         self, bomb_type: chex.Array, standard_jitter_x: chex.Array
@@ -1698,8 +1776,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         current rate after the configured interval. The burst source is released
         when all rates have been processed.
         """
-        key, burst_length_key = jax.random.split(
-            state.key, 2
+        key, burst_length_key, column_mask_key = jax.random.split(
+            state.key, 3
         )
         ready_demons = self._demons_ready(state)
         shooting_demon_idx = self._active_demon_idx()
@@ -1847,23 +1925,30 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             self._bomb_type_for_source(state, source_idx),
             bomb_type,
         )
+        new_column_mask = self._bomb_row_column_mask(column_mask_key, bomb_type)
+        bomb_column_active = jnp.where(
+            can_start_burst, new_column_mask, state.bomb_column_active
+        )
         source_ready = ready_demons[source_idx]
         _, source_y, _, source_height = _bomb_source_bounds(source_idx, state)
         base_x = _calc_burst_base_x(source_idx, state)
 
-        burst_length_idx = jax.random.randint(
+        column_count = jnp.asarray(
+            self.consts.BOMB_TYPE_COLUMN_COUNT, dtype=jnp.int32
+        )[bomb_type]
+        min_rows, max_rows = self._row_count_range(bomb_type, state.wave_pattern)
+        row_count = jax.random.randint(
             burst_length_key,
             (),
-            0,
-            len(self.consts.BOMB_BURST_LENGTH_OPTIONS),
+            min_rows,
+            max_rows + 1,
             dtype=jnp.int32,
         )
-        burst_length_options = jnp.asarray(
-            self.consts.BOMB_BURST_LENGTH_OPTIONS,
-            dtype=jnp.int32,
-        )
-        burst_length = burst_length_options[burst_length_idx]
-        burst_length = self._bomb_burst_length_for_type(bomb_type, burst_length)
+        # NOTE: a burst can only use MAX_BOMBS physical slots total. Row counts
+        # that would need more than MAX_BOMBS // column_count rows are clamped
+        # down rather than crashing — see the capacity discussion above; this
+        # currently under-delivers rows for STANDARD's 5-6 range and for TIGHT.
+        burst_length = jnp.clip(row_count * column_count, 1, self.consts.MAX_BOMBS)
         active_burst_length = jnp.where(
             can_start_burst,
             burst_length,
@@ -1894,7 +1979,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             burst_in_progress,
             jnp.logical_and(source_ready, burst_timer <= 0),
         )
-        active_burst_slots = slot_ids < active_burst_length
+        active_burst_slots = jnp.logical_and(
+            slot_ids < active_burst_length, bomb_column_active
+        )
         slots_in_rate = jnp.logical_and(
             rate_by_slot == safe_burst_step,
             active_burst_slots,
@@ -1961,6 +2048,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_y=bomb_y,
             bomb_spawn_y=bomb_spawn_y,
             bomb_active=bomb_active,
+            bomb_column_active=bomb_column_active,
             bomb_type=bomb_type,
             bomb_source_idx=source_idx,
             bomb_burst_step=next_burst_step,
