@@ -270,7 +270,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     # index (waves 0-1, 2-3, 4-5, 6-7, 8-9, 10-11).
     WAVE_BIG_DEMON_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(BOMB_TYPE_SNAKE, BOMB_TYPE_LONG, BOMB_TYPE_STANDARD,
+        default=(BOMB_TYPE_STANDARD, BOMB_TYPE_LONG, BOMB_TYPE_STANDARD,
                   BOMB_TYPE_LONG, BOMB_TYPE_STANDARD, BOMB_TYPE_LONG),
     )
     # Bomb type fired by a split small demon's burst, same indexing. The first
@@ -1691,8 +1691,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             secondary_sweep_mask,
         )
 
-        # Keep the three slots ordered top-to-bottom with a minimum gap. This
-        # prevents the target nudges from collapsing demon rows.
+        # Preserve whichever slot is the bomb-burst source: its own motion is
+        # already correctly paused above via move_y/slot_move, but the
+        # top-to-bottom spacing enforcement below can still nudge its y as a
+        # side effect of a *different*, still-moving slot's position. Roll
+        # that slot back to its pre-formation-clamp value so every row of an
+        # in-progress burst fires from the same fixed y.
+        pre_formation_demons_y = demons_y
+
         top = jnp.clip(demons_y[0], self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y)
         middle = jnp.maximum(
             demons_y[1],
@@ -1708,6 +1714,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bottom,
         )), self.consts.DEMON_MIN_Y, self.consts.DEMON_MAX_Y).astype(jnp.int32)
         demons_y = demons_y.at[:self.consts.MAX_DEMONS].set(formation_y)
+        demons_y = jnp.where(source_blocks_primary, pre_formation_demons_y, demons_y)
 
         demon_x_motion_accumulator = jnp.where(
             can_move,
