@@ -457,8 +457,8 @@ class DemonAttackState(struct.PyTreeNode):
 
     bomb_x: chex.Array
     bomb_y: chex.Array
-    bomb_spawn_x: chex.Array
     bomb_spawn_y: chex.Array
+    bomb_jitter_offset: chex.Array
     bomb_active: chex.Array
     bomb_column_active: chex.Array  # fixed mask which columns are active for the current burst
     bomb_type: chex.Array
@@ -625,8 +625,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return dict(
             bomb_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
-            bomb_spawn_x=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_spawn_y=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
+            bomb_jitter_offset=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.int32),
             bomb_active=jnp.zeros((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_column_active=jnp.ones((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_type=jnp.array(BOMB_TYPE_STANDARD, dtype=jnp.int32),
@@ -1938,12 +1938,14 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         )
         table_jitter = jitter_x_table[jitter_x_phase]
 
-        # Random-walk jitter: an independent bounded step per slot, persisted
-        # via bomb_x itself (compared against the fixed bomb_spawn_x anchor),
-        # rather than a shared deterministic waveform. Each slot's step is
-        # drawn independently, and only taken every STEP_INTERVAL frames (on
-        # a per-slot phase, so slots don't all step in lock-step), so drift
-        # reads as slow and organic rather than a fast per-frame wobble.
+        # Random-walk jitter: an independent bounded step per slot, held as
+        # its own persistent offset (bomb_jitter_offset) rather than inferred
+        # from bomb_x itself. This is required because tracking mode
+        # recomputes bomb_x's base position fresh from the demon's current x
+        # every frame — inferring drift from (bomb_x - bomb_spawn_x) would
+        # silently discard accumulated drift the instant the demon moves.
+        # The offset is added on top of the resolved base position below,
+        # after tracking, so it survives regardless of whether the base moved.
         uses_random_walk_jitter = jnp.asarray(
             self.consts.BOMB_TYPE_RANDOM_WALK_JITTER, dtype=jnp.bool_
         )[bomb_type]
@@ -1957,21 +1959,24 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             1,
         )
         walk_step_due = jnp.mod(state.step_counter + slot_ids, step_interval) == 0
-        current_drift = state.bomb_x - state.bomb_spawn_x
+        current_offset = state.bomb_jitter_offset
         proposed_step = jax.random.randint(
             jitter_walk_key, (self.consts.MAX_BOMBS,), -1, 2, dtype=jnp.int32
         )
-        would_exceed_bound = jnp.abs(current_drift + proposed_step) > max_drift
-        walk_step = jnp.where(
+        would_exceed_bound = jnp.abs(current_offset + proposed_step) > max_drift
+        step_to_apply = jnp.where(
             jnp.logical_and(walk_step_due, jnp.logical_not(would_exceed_bound)),
             proposed_step,
             0,
         )
-
-        jitter_x = self._bomb_jitter_for_type(
-            bomb_type,
-            jnp.where(uses_random_walk_jitter, walk_step, table_jitter),
+        bomb_jitter_offset = jnp.where(
+            bomb_active,
+            current_offset + step_to_apply,
+            current_offset,
         )
+
+        table_jitter = jitter_x_table[jitter_x_phase]
+        table_jitter_x = self._bomb_jitter_for_type(bomb_type, table_jitter)
 
         should_use_tracking_projectiles = state.wave_number >= self.consts.TRACKING_PROJECTILES_START_WAVE
 
@@ -1979,8 +1984,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             _base_x = _calc_burst_base_x(s.bomb_source_idx, s)
             bomb_type = s.bomb_type
             tracked_x = _base_x + self._bomb_x_offsets_for_type(bomb_type)
-            # Stop tracking once the original source demon is dead/respawning,
-            # otherwise the bomb snaps to whatever new demon reuses that slot.
             source_still_ready = ready_demons[s.bomb_source_idx]
             return jnp.where(source_still_ready, tracked_x, s.bomb_x)
 
@@ -1993,6 +1996,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             use_normal_bombs,
             operand=state,
         )
+
+        # Persistent random-walk drift is added on top of the resolved base
+        # (tracked or held) so it survives base-position recomputation.
+        # Non-walk types keep the original per-frame table-jitter nudge,
+        # which is intentionally not cumulative.
+        jitter_x = jnp.where(uses_random_walk_jitter, bomb_jitter_offset, table_jitter_x)
 
         moved_x = x_before_jitter + jnp.where(bomb_active, jitter_x, 0)
         bomb_x = jnp.where(bomb_active, moved_x, state.bomb_x)
@@ -2102,11 +2111,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             fired_y,
             state.bomb_spawn_y,
         )
-        bomb_spawn_x = jnp.where(
-            should_activate_slot,
-            fired_x,
-            state.bomb_spawn_x,
-        )
         bomb_active = jnp.logical_or(bomb_active, should_activate_slot)
 
         # After firing, arm the delay before the next shot in the same burst.
@@ -2152,8 +2156,8 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             key=key,
             bomb_x=bomb_x,
             bomb_y=bomb_y,
-            bomb_spawn_x=bomb_spawn_x,
             bomb_spawn_y=bomb_spawn_y,
+            bomb_jitter_offset=bomb_jitter_offset,
             bomb_active=bomb_active,
             bomb_column_active=bomb_column_active,
             bomb_type=bomb_type,
