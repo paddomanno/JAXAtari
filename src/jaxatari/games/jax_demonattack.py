@@ -306,22 +306,8 @@ class DemonAttackConstants(AutoDerivedConstants):
     PLAYER_DEATH_FLASH_DURATION: int = struct.field(pytree_node=False, default=20)
 
     BOMB_SIZE: Tuple[int, int] = struct.field(pytree_node=False, default=(4, 1))
-    MAX_BOMBS: int = struct.field(pytree_node=False, default=7)
-    BOMB_BURST_RATES: int = struct.field(pytree_node=False, default=4)
+    MAX_BOMBS: int = struct.field(pytree_node=False, default=12)
     BOMB_PRE_FIRE_PAUSE: int = struct.field(pytree_node=False, default=20)
-    # Assign the seven bomb slots to four timed volleys: 2 + 2 + 2 + 1.
-    BOMB_BURST_RATE_BY_SLOT: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(0, 0, 1, 1, 2, 2, 3),
-    )
-    BOMB_BURST_X_OFFSETS: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(-2, 2, -2, 2, -2, 2, -1),
-    )
-    LONG_BOMB_BURST_X_OFFSETS: Tuple[int, ...] = struct.field(
-        pytree_node=False,
-        default=(-4, 4),
-    )
     BOMB_JITTER_X_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
         default=(0, 1, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0),
@@ -347,16 +333,11 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(True, False, True, False),  # STANDARD, LONG, TIGHT, SNAKE
     )
-    # One row of x-offsets per bomb type, padded to MAX_BOMBS. STANDARD/LONG rows
-    # reproduce today's BOMB_BURST_X_OFFSETS / LONG_BOMB_BURST_X_OFFSETS exactly.
-    BOMB_TYPE_X_OFFSETS: Tuple[Tuple[int, ...], ...] = struct.field(
+    # Half the center-to-center column spacing, in px. 2 columns are placed at
+    # ±half_width from the burst's center x; 1-column types (SNAKE) use 0.
+    BOMB_TYPE_COLUMN_HALF_WIDTH: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(
-            (-2, 2, -2, 2, -2, 2, -1),  # STANDARD
-            (-4, 4, -4, 4, -4, 4, -4),  # LONG — tiled, was zero-padded past slot 1
-            (-1, 1, -1, 1, -1, 1, 0),   # TIGHT (placeholder)
-            (0, 0, 0, 0, 0, 0, 0),      # SNAKE (placeholder)
-        ),
+        default=(2, 4, 1, 0),  # STANDARD, LONG, TIGHT, SNAKE
     )
     # Whether this bomb type applies BOMB_JITTER_X_TABLE at all.
     BOMB_TYPE_HAS_JITTER: Tuple[bool, ...] = struct.field(
@@ -517,8 +498,10 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             )
         per_type_tables = [
             "BOMB_TYPE_COLUMN_COUNT",
-            "BOMB_TYPE_X_OFFSETS",
+            "BOMB_TYPE_COLUMN_HALF_WIDTH",
             "BOMB_TYPE_HAS_JITTER",
+            "BOMB_TYPE_SHARED_ROW_JITTER",
+            "BOMB_TYPE_ALLOWS_PARTIAL_ROWS",
             "BOMB_TYPE_ROW_RANGE",
             "BOMB_TYPE_UNIT_LENGTH",
         ]
@@ -617,7 +600,7 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             bomb_column_active=jnp.ones((self.consts.MAX_BOMBS,), dtype=jnp.bool_),
             bomb_type=jnp.array(BOMB_TYPE_STANDARD, dtype=jnp.int32),
             bomb_source_idx=jnp.array(0, dtype=jnp.int32),
-            bomb_burst_step=jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            bomb_burst_step=jnp.array(self.consts.MAX_BOMBS, dtype=jnp.int32),
             bomb_burst_length=jnp.array(0, dtype=jnp.int32),
             bomb_burst_timer=jnp.array(0, dtype=jnp.int32),
             bomb_action_counter=jnp.array(0, dtype=jnp.int32),
@@ -717,39 +700,41 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return min_rows, max_rows
 
     def _bomb_row_column_mask(
-        self,
-        key: chex.PRNGKey,
-        bomb_type: chex.Array,
+            self,
+            key: chex.PRNGKey,
+            bomb_type: chex.Array,
     ) -> chex.Array:
         """Per-slot mask deciding which column(s) of each row fire.
 
-        Draws one pattern per BOMB_BURST_RATE_BY_SLOT rate-group — left-only,
-        right-only, or both — never "neither"; a fully inactive row is only
-        ever produced by the dedicated empty-row mechanism, not here. Types
-        that don't allow partial rows (LONG, SNAKE) always report every slot
+        Randomly picks one pattern per row: left-only, right-only, or both — never "neither";
+        a fully inactive row is only ever produced by the dedicated empty-row mechanism, not here.
+
+        Types that don't allow partial rows (LONG, SNAKE) always report every slot
         active, so their bursts are unaffected.
+
+        Row grouping is derived from this type's column count (2 slots per row for
+        2-column types, 1 slot per row for SNAKE) rather than a fixed table, so
+        every physical slot belongs to a real row with no leftover/unpaired slot.
         """
-        rate_by_slot = jnp.asarray(self.consts.BOMB_BURST_RATE_BY_SLOT, dtype=jnp.int32)
+        slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
         column_count = jnp.asarray(self.consts.BOMB_TYPE_COLUMN_COUNT, dtype=jnp.int32)[
             bomb_type
         ]
+        rate_by_slot = slot_ids // column_count
         allows_partial = jnp.asarray(
             self.consts.BOMB_TYPE_ALLOWS_PARTIAL_ROWS, dtype=jnp.bool_
         )[bomb_type]
 
-        # 1=left only, 2=right only, 3=both, drawn per rate-group (row).
+        # 1=left only, 2=right only, 3=both, drawn per row. MAX_BOMBS is a safe
+        # upper bound on the number of rows (reached when column_count == 1), so
+        # there are always enough entries regardless of the resolved type's
+        # actual row count.
         patterns = jax.random.randint(
-            key, (self.consts.BOMB_BURST_RATES,), 1, 4, dtype=jnp.int32
+            key, (self.consts.MAX_BOMBS,), 1, 4, dtype=jnp.int32
         )
-        # The final rate-group only ever contains a single physical slot (the
-        # MAX_BOMBS-odd leftover, e.g. slot 6 of 7) rather than a true left/right
-        # pair, so it has no meaningful "partial" state — always force "both"
-        # so that lone slot is never masked off by an unrelated draw.
-        patterns = patterns.at[self.consts.BOMB_BURST_RATES - 1].set(3)
 
-        slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
         slot_position = jnp.where(column_count > 1, slot_ids % column_count, 0)
-        row_pattern = patterns[rate_by_slot[slot_ids]]
+        row_pattern = patterns[rate_by_slot]
         bit = jnp.where(slot_position == 0, 1, 2)
         column_active = (row_pattern & bit) > 0
 
@@ -765,8 +750,17 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         return jnp.where(has_jitter, standard_jitter_x, 0)
 
     def _bomb_x_offsets_for_type(self, bomb_type: chex.Array) -> chex.Array:
-        offsets_by_type = jnp.asarray(self.consts.BOMB_TYPE_X_OFFSETS, dtype=jnp.int32)
-        return offsets_by_type[bomb_type]
+        half_width = jnp.asarray(
+            self.consts.BOMB_TYPE_COLUMN_HALF_WIDTH, dtype=jnp.int32
+        )[bomb_type]
+        column_count = jnp.asarray(
+            self.consts.BOMB_TYPE_COLUMN_COUNT, dtype=jnp.int32
+        )[bomb_type]
+        slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
+        slot_position = jnp.where(column_count > 1, slot_ids % column_count, 0)
+        # position 0 -> left column, position 1 -> right column. SNAKE
+        # (half_width=0) collapses both branches to 0, i.e. no offset.
+        return jnp.where(slot_position == 0, -half_width, half_width)
 
     def _bomb_sprite_repeats_for_type(self, bomb_type: chex.Array) -> chex.Array:
         return jnp.asarray(self.consts.BOMB_TYPE_UNIT_LENGTH, dtype=jnp.int32)[bomb_type]
@@ -1418,10 +1412,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 jnp.logical_not(self._death_animation_blocks_movement(state)),
             ),
         )
-        rate_by_slot = jnp.asarray(
-            self.consts.BOMB_BURST_RATE_BY_SLOT,
-            dtype=jnp.int32,
-        )
+        bomb_slot_ids = jnp.arange(self.consts.MAX_BOMBS, dtype=jnp.int32)
+        column_count = jnp.asarray(
+            self.consts.BOMB_TYPE_COLUMN_COUNT, dtype=jnp.int32
+        )[state.bomb_type]
+        rate_by_slot = bomb_slot_ids // column_count
         last_active_rate = rate_by_slot[jnp.maximum(state.bomb_burst_length - 1, 0)]
         burst_in_progress = jnp.logical_and(
             state.bomb_burst_length > 0,
@@ -1944,10 +1939,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             max_rows + 1,
             dtype=jnp.int32,
         )
-        # NOTE: a burst can only use MAX_BOMBS physical slots total. Row counts
-        # that would need more than MAX_BOMBS // column_count rows are clamped
-        # down rather than crashing — see the capacity discussion above; this
-        # currently under-delivers rows for STANDARD's 5-6 range and for TIGHT.
+        # NOTE: with MAX_BOMBS sized to fit every type's max row/segment count
+        # (see step 5), this clip is now a no-op safety bound rather than an
+        # active truncation.
         burst_length = jnp.clip(row_count * column_count, 1, self.consts.MAX_BOMBS)
         active_burst_length = jnp.where(
             can_start_burst,
@@ -1965,13 +1959,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             state.bomb_burst_timer,
         )
         # Activate every slot assigned to this bomb shot in one vectorized operation.
+        # Row grouping is derived from this type's column count rather than a
+        # fixed table, so every physical slot belongs to a real row.
+        rate_by_slot = slot_ids // column_count
+        burst_rate_count = self.consts.MAX_BOMBS // column_count
         safe_burst_step = jnp.minimum(
             burst_step,
-            self.consts.BOMB_BURST_RATES - 1,
-        )
-        rate_by_slot = jnp.asarray(
-            self.consts.BOMB_BURST_RATE_BY_SLOT,
-            dtype=jnp.int32,
+            burst_rate_count - 1,
         )
         last_active_rate = rate_by_slot[jnp.maximum(active_burst_length - 1, 0)]
         burst_in_progress = burst_step <= last_active_rate
@@ -2025,9 +2019,13 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.array(0, dtype=jnp.int32),
             active_burst_length,
         )
+        # MAX_BOMBS is used as an "always past the end" sentinel here: it's
+        # guaranteed larger than any possible rate_by_slot value (which tops
+        # out at MAX_BOMBS // column_count - 1), so a released burst always
+        # reads as fully complete regardless of what type it was.
         next_burst_step = jnp.where(
             release_source,
-            jnp.array(self.consts.BOMB_BURST_RATES, dtype=jnp.int32),
+            jnp.array(self.consts.MAX_BOMBS, dtype=jnp.int32),
             next_burst_step,
         )
         next_burst_timer = jnp.where(
@@ -2295,9 +2293,11 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.zeros_like(state.bomb_active),
             state.bomb_active,
         )
+        # MAX_BOMBS as sentinel — see note in _bomb_step's release_source
+        # handling; guaranteed past the end of any type's rate range.
         bomb_burst_step = jnp.where(
             any_player_hit,
-            self.consts.BOMB_BURST_RATES,
+            self.consts.MAX_BOMBS,
             state.bomb_burst_step,
         )
         bomb_burst_length = jnp.where(
