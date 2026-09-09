@@ -28,8 +28,8 @@ SPLIT_DEATH_PRIMARY = 1
 SPLIT_DEATH_SECONDARY = 2
 BOMB_TYPE_STANDARD = 0
 BOMB_TYPE_LONG = 1
-BOMB_TYPE_TIGHT = 2      # new — not yet reachable from any wave table
-BOMB_TYPE_SNAKE = 3      # new — not yet reachable from any wave table
+BOMB_TYPE_TIGHT = 2
+BOMB_TYPE_SNAKE = 3
 NUM_BOMB_TYPES = 4
 DIFFICULTY_TABLE_NAMES = (
     "ENEMY_SHOT_SPEED_TABLE",
@@ -37,6 +37,7 @@ DIFFICULTY_TABLE_NAMES = (
     "WAVE_BIG_DEMON_BOMB_TYPE_TABLE",
     "WAVE_SMALL_DEMON_BOMB_TYPE_TABLE",
     "WAVE_BIG_DEMON_STANDARD_ROW_RANGE_TABLE",
+    "WAVE_JITTER_Y_WAVEFORM_TABLE",
 )
 
 def _get_default_asset_config() -> tuple:
@@ -265,8 +266,8 @@ class DemonAttackConstants(AutoDerivedConstants):
     )
     ENEMY_SHOT_SPEED_TABLE: Tuple[int, ...] = struct.field(
         pytree_node=False,
-        default=(1,1,1,1,1,1),
-    ) # TODO needs adjustments
+        default=(1, 1, 1, 2, 2, 2),
+    )
     # Bomb type fired by a normal-size demon's burst, indexed by difficulty
     # index (waves 0-1, 2-3, 4-5, 6-7, 8-9, 10-11).
     WAVE_BIG_DEMON_BOMB_TYPE_TABLE: Tuple[int, ...] = struct.field(
@@ -339,9 +340,35 @@ class DemonAttackConstants(AutoDerivedConstants):
         pytree_node=False,
         default=(0, 1, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0),
     )
-    BOMB_JITTER_Y_TABLE: Tuple[int, ...] = struct.field(
+    # Three separate y-jitter waveforms for jitter-fall types (STANDARD,
+    # TIGHT). Each waveform nets a different total displacement per cycle,
+    # giving direct control over jitter-fall descent speed WITHOUT a
+    # multiplier — a multiplier scales every entry including the dip, which
+    # is why scaling ENEMY_SHOT_SPEED_TABLE previously blew up the jitter's
+    # visual amplitude along with its net speed. All waveforms MUST be the
+    # SAME length: that length is used as a fixed period for the per-frame
+    # phase lookup, which needs a static (non-data-dependent) shape under
+    # jax.jit — the selected waveform is chosen at runtime via wave_pattern,
+    # so its length can't vary with that choice.
+    BOMB_JITTER_Y_TABLES: Tuple[Tuple[int, ...], ...] = struct.field(
         pytree_node=False,
-        default=(-3, 0, 0, 6, 0, 0, 6, 0, 0),
+        default=(
+            (-3, 0, 0, 6, 0, 0, 6, 0, 0),   # 0: slow   — nets  9px / 9 frames
+            (-3, 0, 1, 6, 1, 0, 6, 1, 0),   # 1: medium — nets 12px / 9 frames
+            (-4, 1, 4, 1, 3, 1, 6, 2, 1),   # 2: fast   — nets 15px / 9 frames
+        ),
+    )
+    # Which BOMB_JITTER_Y_TABLES waveform (by index) this wave's jitter-fall
+    # bombs use, indexed by difficulty index (waves 0-1, 2-3, 4-5, 6-7, 8-9,
+    # 10-11; pattern repeats from index 4) — same indexing convention as
+    # ENEMY_SHOT_SPEED_TABLE. Only consumed when the wave's resolved bomb
+    # type is a jitter-fall type (STANDARD/TIGHT); continuous-fall types
+    # (LONG/SNAKE) read speed from ENEMY_SHOT_SPEED_TABLE directly and
+    # ignore this table entirely — the two speed controls are now fully
+    # independent of each other.
+    WAVE_JITTER_Y_WAVEFORM_TABLE: Tuple[int, ...] = struct.field(
+        pytree_node=False,
+        default=(0, 0, 1, 1, 2, 2),
     )
     LONG_BOMB_HEIGHT_MULTIPLIER: int = struct.field(pytree_node=False, default=3)
 
@@ -585,6 +612,21 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         if len(consts.ENEMY_SHOT_ACTION_TABLE) != INITIAL_WAVE_PATTERNS:
             raise ValueError(
                 f"ENEMY_SHOT_ACTION_TABLE needs {INITIAL_WAVE_PATTERNS} pattern entries"
+            )
+        waveform_lengths = {len(table) for table in consts.BOMB_JITTER_Y_TABLES}
+        if len(waveform_lengths) != 1:
+            raise ValueError(
+                "All BOMB_JITTER_Y_TABLES waveforms must have the same length"
+            )
+        num_waveforms = len(consts.BOMB_JITTER_Y_TABLES)
+        invalid_waveform_indices = [
+            v for v in consts.WAVE_JITTER_Y_WAVEFORM_TABLE
+            if not (0 <= v < num_waveforms)
+        ]
+        if invalid_waveform_indices:
+            raise ValueError(
+                "WAVE_JITTER_Y_WAVEFORM_TABLE entries must index into "
+                f"BOMB_JITTER_Y_TABLES (0..{num_waveforms - 1})"
             )
 
     def _resolve_wave_pattern(self, wave_number: chex.Array) -> chex.Array:
@@ -1837,32 +1879,32 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
 
         Two vertical fall modes exist, selected by bomb_type's unit_length:
         - Continuous-fall types (LONG, SNAKE): fall steadily at bomb_speed
-          px/frame.
+          px/frame; segment timing is derived from fall physics
+          (segment_advance_frames) so segments visually chain.
         - Jitter-fall types (STANDARD, TIGHT): every active bomb shares the
-          exact same per-frame y-delta (global step_counter phase, not a
-          per-slot phase), so any offset established between two bombs at
-          spawn time is preserved exactly forever. Row spacing is computed
-          once, at spawn, by anchoring a new row to the previous row's
-          CURRENT position plus a fixed pixel gap (1 laser-unit, or 2 units
-          after a skipped row) — never from timing.
-
-        Two independent x-jitter models exist, selected per bomb type:
-        - TABLE JITTER (STANDARD, TIGHT): a small mean-zero waveform
-          (BOMB_JITTER_X_TABLE) added cumulatively on top of last frame's
-          position — an oscillation, not a drift.
-        - RANDOM-WALK JITTER (SNAKE): an independent, persistent, BOUNDED
-          drift per slot (bomb_jitter_offset), which is an ABSOLUTE total
-          added on top of a clean, jitter-free base every frame — tracked_x
-          when tracking, bomb_spawn_x (fixed at fire time) when held.
+          same per-frame y-delta (global step_counter phase), so any offset
+          established at spawn time is preserved exactly forever. A new
+          row's firing is gated by a REAL-TIME check (row_has_room): does
+          the previous row's CURRENT position already have enough clearance
+          for the new row to be placed one row-height above it? This is
+          checked directly every frame rather than approximated by any
+          precomputed frame count — a fixed interval can only ever be exactly
+          right for one specific waveform phase, undershooting (overlap) for
+          some phases or overshooting (visible detachment from the source)
+          for others. The direct check is optimal: it fires the instant
+          space is confirmed, never before, never later than necessary.
 
         The method also advances the enemy firing scheduler. Once the wave's
         action delay has elapsed, no previous bombs remain active, and at
         least one demon is ready, a burst begins from a selected demon. Each
         burst retains that source demon and activates the bomb slots
-        assigned to its current row/segment after the configured interval.
-        Interior rows may occasionally be skipped (a genuine empty row, at
-        most once per burst, never the first or last row). The burst source
-        is released once all rows have been processed.
+        assigned to its current row/segment once its gating condition is
+        met. Interior rows may occasionally be skipped (a genuine empty row,
+        at most once per burst, never the first or last row) — a skip simply
+        raises the clearance target for the next real row (row_gap_pending),
+        which the row_has_room check then naturally waits for with no
+        separate timer bookkeeping needed. The burst source is released once
+        all rows have been processed.
         """
         key, burst_length_key, column_mask_key, jitter_walk_key, skip_key = jax.random.split(
             state.key, 5
@@ -1896,19 +1938,18 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         ]
         uses_continuous_fall = unit_length > 1
 
-        # --- Y-JITTER: simple shared per-frame delta ---
-        jitter_y_table = jnp.asarray(
-            self.consts.BOMB_JITTER_Y_TABLE,
-            dtype=jnp.int32,
+        # --- Y-JITTER: waveform selected per wave, shared per-frame delta ---
+        jitter_y_tables = jnp.asarray(self.consts.BOMB_JITTER_Y_TABLES, dtype=jnp.int32)
+        jitter_y_period = jitter_y_tables.shape[1]
+        jitter_waveform_index = self._difficulty_value_for_pattern(
+            self.consts.WAVE_JITTER_Y_WAVEFORM_TABLE, state.wave_pattern
         )
-        jitter_y_phase = jnp.mod(
-            state.step_counter,
-            len(self.consts.BOMB_JITTER_Y_TABLE),
-        )
+        selected_jitter_y_table = jitter_y_tables[jitter_waveform_index]
+        jitter_y_phase = jnp.mod(state.step_counter, jitter_y_period)
         bomb_delta_y = jnp.where(
             uses_continuous_fall,
             bomb_speed,
-            jitter_y_table[jitter_y_phase] * bomb_speed,
+            selected_jitter_y_table[jitter_y_phase],
         )
         # --- end Y-JITTER ---
 
@@ -1917,7 +1958,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             + self._demon_height_size(state.demon_status[state.bomb_source_idx])
         )
         minimum_bomb_y = jnp.maximum(state.bomb_spawn_y, source_bottom_y)
-        # Never rise above the firing position or the source demon's current bottom edge
         moved_y = jnp.maximum(
             state.bomb_y + jnp.where(state.bomb_active, bomb_delta_y, 0),
             minimum_bomb_y,
@@ -2112,6 +2152,9 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             jnp.array(False, dtype=jnp.bool_),
             state.bomb_burst_used_skip,
         )
+        # Whether the row about to fire needs the doubled (2-unit) gap
+        # because an earlier row this burst was skipped. Consumed the
+        # moment a row actually fires (below).
         row_gap_pending = jnp.where(
             can_start_burst,
             jnp.array(False, dtype=jnp.bool_),
@@ -2130,12 +2173,41 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             slot_ids < active_burst_length, bomb_column_active
         )
 
+        # --- ROW SPAWN POSITION + REAL-TIME ROOM CHECK (jitter-fall only) ---
+        # Computed BEFORE the firing decision, since jitter-fall types gate
+        # firing on whether there's actually room for this row yet — a
+        # direct spatial check, not a precomputed timer, so it can neither
+        # fire too early (overlap) nor wait longer than truly necessary
+        # (detachment).
+        row_index = safe_burst_step
+        is_first_row = row_index == 0
+        prev_row_mask = jnp.logical_and(
+            rate_by_slot == jnp.maximum(row_index - 1, 0),
+            bomb_active,
+        )
+        prev_row_y = jnp.max(jnp.where(prev_row_mask, moved_y, 0))
+        row_occupied = unit_length * self.consts.BOMB_SIZE[0]
+        row_gap = jnp.where(row_gap_pending, 2, 1) * self.consts.BOMB_SIZE[0]
+        candidate_fired_y_jitter = prev_row_y - row_occupied - row_gap
+        row_has_room = jnp.logical_or(
+            is_first_row,
+            candidate_fired_y_jitter >= source_y + source_height,
+        )
+        # --- end ROW SPAWN POSITION / ROOM CHECK ---
+
         decision_due = jnp.logical_and(
             burst_in_progress,
-            jnp.logical_and(source_ready, burst_timer <= 0),
+            jnp.logical_and(
+                source_ready,
+                jnp.logical_and(
+                    burst_timer <= 0,
+                    jnp.logical_or(uses_continuous_fall, row_has_room),
+                ),
+            ),
         )
 
         # --- EMPTY-ROW SKIP MECHANISM ---
+        # At most one empty row per burst, never the first or last row.
         empty_row_probability = jnp.asarray(
             self.consts.BOMB_TYPE_EMPTY_ROW_PROBABILITY, dtype=jnp.float32
         )[bomb_type]
@@ -2147,23 +2219,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
                 jax.random.uniform(skip_key, ()) < empty_row_probability,
             ),
         )
+        # Raising the pending flag increases row_gap's target on the NEXT
+        # frame's room check — the row that was skipped will now simply wait
+        # (via row_has_room, automatically) for double clearance before it's
+        # allowed to fire. No separate re-armed timer needed.
         row_gap_pending = jnp.logical_or(row_gap_pending, skip_this_row)
         # --- end EMPTY-ROW SKIP MECHANISM ---
 
-        # --- INTER-ROW TIMING (pacing only — spacing is handled spatially below) ---
-        # Continuous-fall types: derived from fall physics, so segments chain
-        # with zero gap. Jitter-fall types: a small fixed constant, decoupled
-        # from action_limit (see BOMB_TYPE_JITTER_ROW_INTERVAL_FRAMES comment).
-        segment_advance_frames = jnp.where(
-            uses_continuous_fall,
-            jnp.maximum(
-                -(-(unit_length * self.consts.BOMB_SIZE[0]) // jnp.maximum(bomb_speed, 1))
-                - 1,
-                0,
-            ),
-            jnp.asarray(
-                self.consts.BOMB_TYPE_JITTER_ROW_INTERVAL_FRAMES, dtype=jnp.int32
-            )[bomb_type],
+        # --- INTER-ROW TIMING — continuous-fall types only ---
+        # Jitter-fall types are only timed by row_has_room (above).
+        # Continuous-fall types (LONG, SNAKE) still derive their interval from fall speed
+        segment_advance_frames = jnp.maximum(
+            -(-(unit_length * self.consts.BOMB_SIZE[0]) // jnp.maximum(bomb_speed, 1))
+            - 1,
+            0,
         )
         # --- end INTER-ROW TIMING ---
 
@@ -2175,24 +2244,12 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             active_burst_slots,
         )
 
-        # --- ROW SPAWN POSITION (jitter-fall types only) ---
-        row_index = safe_burst_step
-        is_first_row = row_index == 0
-        prev_row_mask = jnp.logical_and(
-            rate_by_slot == jnp.maximum(row_index - 1, 0),
-            bomb_active,
-        )
-        prev_row_y = jnp.max(jnp.where(prev_row_mask, moved_y, 0))
-        row_occupied = unit_length * self.consts.BOMB_SIZE[0]
-        row_gap = jnp.where(row_gap_pending, 2, 1) * self.consts.BOMB_SIZE[0]
-        fired_y_jitter = jnp.where(
-            is_first_row,
-            source_y + source_height,
-            prev_row_y - row_occupied - row_gap,
-        )
+        # Defensive floor: guarantees a row can never be positioned above the
+        # source even if some future edge case violates row_has_room's
+        # guarantee. Should never actually trigger given the gate above.
+        fired_y_jitter = jnp.maximum(candidate_fired_y_jitter, source_y + source_height)
         fired_y_continuous = source_y + source_height
         fired_y = jnp.where(uses_continuous_fall, fired_y_continuous, fired_y_jitter)
-        # --- end ROW SPAWN POSITION ---
 
         x_offsets = self._bomb_x_offsets_for_type(bomb_type)
         fired_x = base_x + x_offsets
@@ -2224,11 +2281,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         burst_done = next_burst_step > last_active_rate
         next_burst_timer = jnp.where(
             fire_rate_now,
-            jnp.where(burst_done, 0, segment_advance_frames),
             jnp.where(
-                skip_this_row,
+                burst_done,
+                0,
+                jnp.where(uses_continuous_fall, segment_advance_frames, 0),
+            ),
+            jnp.where(
+                jnp.logical_and(skip_this_row, uses_continuous_fall),
+                # Skipped row: re-arm the full inter-row delay so the eventual real
+                # firing happens one full segment-length of extra fall time later,
+                # doubling the visible gap. Jitter-fall types don't need this —
+                # their skip is entirely handled by row_gap_pending widening the
+                # row_has_room clearance target, with no timer involved.
                 segment_advance_frames,
-                jnp.maximum(burst_timer - 1, 0),
+                jnp.where(uses_continuous_fall, jnp.maximum(burst_timer - 1, 0), 0),
             ),
         )
         source_lost = jnp.logical_and(active_burst_length > 0, jnp.logical_not(source_ready))
