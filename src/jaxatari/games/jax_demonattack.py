@@ -539,7 +539,6 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
             "BOMB_TYPE_ROW_RANGE",
             "BOMB_TYPE_UNIT_LENGTH",
             "BOMB_TYPE_EMPTY_ROW_PROBABILITY",
-            "BOMB_TYPE_JITTER_ROW_INTERVAL_FRAMES",
         ]
         invalid_per_type_tables = [
             name
