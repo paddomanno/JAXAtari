@@ -25,7 +25,7 @@ OBJECT_CENTRIC: True
 # TRAIN_MODS: mods applied during training (set to null for base env training)
 # EVAL_MODS: mods evaluated separately after training
 TRAIN_MODS: null
-EVAL_MODS: null 
+EVAL_MODS: fast_player,fast_laser,slow_enemy_shots,short_waves,no_enemy_shots,infinite_lives,relentless_waves,late_wave_start,player_guided_laser,homing_laser,teleporting_demons,sidestep_lowest_demon,zigzag_movement_demons,advanced_survival
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).
