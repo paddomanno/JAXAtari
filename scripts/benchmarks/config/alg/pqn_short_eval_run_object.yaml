@@ -25,17 +25,17 @@ OBJECT_CENTRIC: True
 # TRAIN_MODS: mods applied during training (set to null for base env training)
 # EVAL_MODS: mods evaluated separately after training
 TRAIN_MODS: null
-EVAL_MODS: ["fast_player","fast_laser","slow_enemy_shots","short_waves","no_enemy_shots","infinite_lives","relentless_waves","late_wave_start","player_guided_laser","homing_laser","teleporting_demons","sidestep_lowest_demon","zigzag_movement_demons","advanced_survival"]
+EVAL_MODS: ["no_enemy_shots"] # ["fast_player","fast_laser","slow_enemy_shots","short_waves","no_enemy_shots","infinite_lives","relentless_waves","late_wave_start","player_guided_laser","homing_laser","teleporting_demons","sidestep_lowest_demon","zigzag_movement_demons","advanced_survival"]
 
 # Note: This will massively increase compile and run time!
 # But is useful for debugging (watching the video).
 # Turn off for reported training run.
-TEST_DURING_TRAINING: False
-TEST_INTERVAL: 1.0 # in terms of total updates (1.0 means a single test at the end)
+TEST_DURING_TRAINING: True
+TEST_INTERVAL: 0.2 # in terms of total updates (1.0 means a single test at the end)
 TEST_NUM_ENVS: 128 #512
-TEST_NUM_STEPS: 10000
+TEST_NUM_STEPS: 20000
 EPS_TEST: 0.0 # 0 for greedy policy
-RECORD_VIDEO: False
+RECORD_VIDEO: True
 
 # Generate a final video at the end of training (includes the mod eval videos)
 RECORD_FINAL_VIDEO: True
