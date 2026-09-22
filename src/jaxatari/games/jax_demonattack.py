@@ -245,7 +245,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
-    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=4)
+    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=2)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -1204,28 +1204,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         Keep a demon beside the player. Inside the border it keeps its own
         movement; outside it returns to the nearest border.
         """
-        player_left = state.player_x
-        player_right = state.player_x + self.consts.PLAYER_SIZE[1]
-        player_center = player_left + self.consts.PLAYER_SIZE[1] // 2
-        demon_left = demons_x
-        demon_right = demons_x + demon_width
-        demon_center = demon_left + demon_width // 2
+        player_center = state.player_x + self.consts.PLAYER_SIZE[1] // 2
+        demon_center = demons_x + demon_width // 2
         camps_left = demon_center < player_center
-        edge_gap = jnp.where(
-            camps_left,
-            player_left - demon_right,
-            demon_left - player_right,
-        )
-        inside_border = jnp.abs(edge_gap) <= self.consts.DEMON_TRACK_OFFSET
+        dist_to_player_center = jnp.abs(demon_center - player_center)
+        inside_border = jnp.abs(dist_to_player_center) <= self.consts.DEMON_TRACK_OFFSET
         hover_direction = jnp.where(
-            edge_gap <= 0,
+            dist_to_player_center <= 0,
             jnp.logical_not(camps_left),
-            jnp.where(edge_gap >= self.consts.DEMON_TRACK_OFFSET, camps_left, demon_moving_right),
+            jnp.where(dist_to_player_center >= self.consts.DEMON_TRACK_OFFSET, camps_left, demon_moving_right),
         )
         target_x = jnp.where(
             camps_left,
-            state.player_x - demon_width - self.consts.DEMON_TRACK_OFFSET,
-            state.player_x + self.consts.PLAYER_SIZE[1] + self.consts.DEMON_TRACK_OFFSET,
+            state.player_x - self.consts.DEMON_TRACK_OFFSET,
+            state.player_x + self.consts.DEMON_TRACK_OFFSET,
         )
         tracking_direction = jnp.where(
             jnp.logical_and(can_track, jnp.logical_not(inside_border)),
