@@ -245,7 +245,7 @@ class DemonAttackConstants(AutoDerivedConstants):
     DEMON_INITIAL_TELEPORT: int = struct.field(pytree_node=False, default=2)
     DEMON_INITIAL_TELEPORT_TIMER: int = struct.field(pytree_node=False, default=10)
     DEMON_MIN_VERTICAL_DISTANCE: int = struct.field(pytree_node=False, default=12)
-    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=4)
+    DEMON_TRACK_OFFSET: int = struct.field(pytree_node=False, default=2)
     MAX_ROM_WAVES: int = struct.field(pytree_node=False, default=84) # completing wave 84 freezes into a blank screen
     FREEZE_AFTER_MAX_ROM_WAVES: bool = struct.field(pytree_node=False, default=False)
     BLANK_SCREEN_COLOR: Tuple[int, int, int] = struct.field(pytree_node=False, default=(0, 0, 0))
@@ -1204,28 +1204,20 @@ class JaxDemonAttack(JaxEnvironment[DemonAttackState, DemonAttackObservation, De
         Keep a demon beside the player. Inside the border it keeps its own
         movement; outside it returns to the nearest border.
         """
-        player_left = state.player_x
-        player_right = state.player_x + self.consts.PLAYER_SIZE[1]
-        player_center = player_left + self.consts.PLAYER_SIZE[1] // 2
-        demon_left = demons_x
-        demon_right = demons_x + demon_width
-        demon_center = demon_left + demon_width // 2
+        player_center = state.player_x + self.consts.PLAYER_SIZE[1] // 2
+        demon_center = demons_x + demon_width // 2
         camps_left = demon_center < player_center
-        edge_gap = jnp.where(
-            camps_left,
-            player_left - demon_right,
-            demon_left - player_right,
-        )
-        inside_border = jnp.abs(edge_gap) <= self.consts.DEMON_TRACK_OFFSET
+        dist_to_player_center = jnp.abs(demon_center - player_center)
+        inside_border = jnp.abs(dist_to_player_center) <= self.consts.DEMON_TRACK_OFFSET
         hover_direction = jnp.where(
-            edge_gap <= 0,
+            dist_to_player_center <= 0,
             jnp.logical_not(camps_left),
-            jnp.where(edge_gap >= self.consts.DEMON_TRACK_OFFSET, camps_left, demon_moving_right),
+            jnp.where(dist_to_player_center >= self.consts.DEMON_TRACK_OFFSET, camps_left, demon_moving_right),
         )
         target_x = jnp.where(
             camps_left,
-            state.player_x - demon_width - self.consts.DEMON_TRACK_OFFSET,
-            state.player_x + self.consts.PLAYER_SIZE[1] + self.consts.DEMON_TRACK_OFFSET,
+            state.player_x - self.consts.DEMON_TRACK_OFFSET,
+            state.player_x + self.consts.DEMON_TRACK_OFFSET,
         )
         tracking_direction = jnp.where(
             jnp.logical_and(can_track, jnp.logical_not(inside_border)),
@@ -2830,30 +2822,27 @@ class DemonAttackRenderer(JAXGameRenderer):
         )
 
         def render_bomb(i, r):
+            bomb_visible = jnp.logical_and(state.bomb_active[i], jnp.logical_not(state.player_exploding))
+
             def render_bomb_repeat(j, rr):
                 render_y = (
                     state.bomb_y[i]
                     + (j - bomb_repeat_offsets[i]) * self.consts.BOMB_SIZE[0]
                 )
-                return jax.lax.cond(
+                repeat_visible = jnp.logical_and(
+                    bomb_visible,
                     jnp.logical_and(
                         j < visible_bomb_repeats[i],
                         render_y < self.consts.BUNKER_Y - self.consts.BOMB_SIZE[0],
                     ),
-                    lambda: self.jr.render_at(
-                        rr,
-                        state.bomb_x[i],
-                        render_y,
-                        bomb_mask,
-                    ),
+                )
+                return jax.lax.cond(
+                    repeat_visible,
+                    lambda: self.jr.render_at(rr, state.bomb_x[i], render_y, bomb_mask),
                     lambda: rr,
                 )
 
-            return jax.lax.cond(
-                jnp.logical_and(state.bomb_active[i], jnp.logical_not(state.player_exploding)),
-                lambda: jax.lax.fori_loop(0, bomb_sprite_repeats, render_bomb_repeat, r),
-                lambda: r,
-            )
+            return jax.lax.fori_loop(0, bomb_sprite_repeats, render_bomb_repeat, r)
 
         raster = jax.lax.fori_loop(0, self.consts.MAX_BOMBS, render_bomb, raster)
 
@@ -2941,151 +2930,143 @@ class DemonAttackRenderer(JAXGameRenderer):
         demon_mask = demon_masks[demon_anim_idx]
         small_demon_mask = small_demon_masks[demon_anim_idx]
 
+        death_masks_big = self.SHAPE_MASKS["enemy_death_animation"]
+        death_masks_small = self.SHAPE_MASKS["enemy_death_animation_small"]
+
         spawn_anim_total = self.consts.SPAWN_ANIM_FRAMES * self.consts.SPAWN_ANIM_FRAME_DURATION
 
+        # Mutually-exclusive render modes (per demon).
+        MODE_NONE, MODE_DYING, MODE_SPAWNING, MODE_FULL, MODE_SPLIT = 0, 1, 2, 3, 4
+
         def render_demon(i, r):
-            is_spawning = state.spawn_anim_timer[i] > 0
             is_dying = state.demon_death_anim_timer[i] > 0
+            is_spawning = state.spawn_anim_timer[i] > 0
+            alive = state.demons_alive[i]
+            is_small_slot = state.demon_status[i] == DEMON_STATUS_SMALL
+            split_death = state.demon_split_death_part[i] != SPLIT_DEATH_NONE
 
-            elapsed = spawn_anim_total - state.spawn_anim_timer[i]
-            spawn_frame = jnp.clip(
-                elapsed // self.consts.SPAWN_ANIM_FRAME_DURATION,
-                0,
-                self.consts.SPAWN_ANIM_FRAMES - 1,
-            )
+            mode = jnp.where(
+                is_dying, MODE_DYING,
+                jnp.where(
+                    jnp.logical_not(alive), MODE_NONE,
+                    jnp.where(
+                        is_spawning, MODE_SPAWNING,
+                        jnp.where(is_small_slot, MODE_SPLIT, MODE_FULL),
+                    ),
+                ),
+            ).astype(jnp.int32)
 
-            spawn_left_mask = self.SHAPE_MASKS["enemy_spawn_left"][spawn_frame]
-            spawn_right_mask = self.SHAPE_MASKS["enemy_spawn_right"][spawn_frame]
+            def branch_none(rr):
+                return rr
 
-            def render_spawn():
+            def branch_full(rr):
+                blink_phase = (state.spawn_pause_timer[i] // self.consts.DEMON_TELEPORT_BLINK_FRAME_DURATION) & 1
+                blink_visible = jnp.logical_or(
+                    state.spawn_pause_timer[i] <= self.consts.SPAWN_MOVE_PAUSE,
+                    blink_phase == 0,
+                )
+                return jax.lax.cond(
+                    blink_visible,
+                    lambda: self.jr.render_at(rr, state.demons_x[i], state.demons_y[i], demon_mask),
+                    lambda: rr,
+                )
+
+            def branch_split(rr):
+                # Two independent small demons
+                rr = jax.lax.cond(
+                    state.demon_split_primary_alive[i],
+                    lambda: self.jr.render_at(rr, state.demons_x[i], state.demons_y[i], small_demon_mask),
+                    lambda: rr,
+                )
+                rr = jax.lax.cond(
+                    state.demon_split_secondary_alive[i],
+                    lambda: self.jr.render_at(rr, state.demon_split_x[i], state.demons_y[i], small_demon_mask),
+                    lambda: rr,
+                )
+                return rr
+
+            def branch_spawning(rr):
+                # Spawn large demons including spawn animation
+                elapsed = spawn_anim_total - state.spawn_anim_timer[i]
+                spawn_frame = jnp.clip(
+                    elapsed // self.consts.SPAWN_ANIM_FRAME_DURATION,
+                    0,
+                    self.consts.SPAWN_ANIM_FRAMES - 1,
+                )
+                spawn_left_mask = self.SHAPE_MASKS["enemy_spawn_left"][spawn_frame]
+                spawn_right_mask = self.SHAPE_MASKS["enemy_spawn_right"][spawn_frame]
+
                 spawn_max_x = jnp.minimum(
                     jnp.array(self.consts.DEMON_MAX_X, dtype=jnp.int32),
                     jnp.array(self.consts.WIDTH - self.consts.SPAWN_ANIM_WIDTH, dtype=jnp.int32),
                 )
-
                 target_x = jnp.clip(
                     state.demons_x[i] - (self.consts.SPAWN_ANIM_WIDTH - self.consts.DEMON_SIZE[1]) // 2,
                     self.consts.DEMON_MIN_X,
                     spawn_max_x,
                 )
-
                 last_step = jnp.maximum(
                     jnp.array(spawn_anim_total - 1, dtype=jnp.int32),
                     jnp.array(1, dtype=jnp.int32),
                 )
-
                 left_render_x = (
-                                        self.consts.DEMON_MIN_X * (last_step - elapsed)
-                                        + target_x * elapsed
-                                ) // last_step
-
+                    self.consts.DEMON_MIN_X * (last_step - elapsed) + target_x * elapsed
+                ) // last_step
                 right_render_x = (
-                                         spawn_max_x * (last_step - elapsed)
-                                         + target_x * elapsed
-                                 ) // last_step
+                    spawn_max_x * (last_step - elapsed) + target_x * elapsed
+                ) // last_step
 
-                spawn_raster = self.jr.render_at_clipped(
-                    r,
-                    left_render_x,
-                    state.demons_y[i],
-                    spawn_left_mask,
-                )
-                return self.jr.render_at_clipped(
-                    spawn_raster,
-                    right_render_x,
-                    state.demons_y[i],
-                    spawn_right_mask,
-                )
+                rr = self.jr.render_at_clipped(rr, left_render_x, state.demons_y[i], spawn_left_mask)
+                return self.jr.render_at_clipped(rr, right_render_x, state.demons_y[i], spawn_right_mask)
 
-            def render_split():
-                split_raster = jax.lax.cond(
-                    state.demon_split_primary_alive[i],
-                    lambda: self.jr.render_at_clipped(
-                        r,
-                        state.demons_x[i],
-                        state.demons_y[i],
-                        small_demon_mask,
-                    ),
-                    lambda: r,
+            def branch_dying(rr):
+                # Death for big or small demon
+                rr = jax.lax.cond(
+                    jnp.logical_and(split_death, state.demon_split_primary_alive[i]),
+                    lambda: self.jr.render_at(rr, state.demons_x[i], state.demons_y[i], small_demon_mask),
+                    lambda: rr,
                 )
-                return jax.lax.cond(
-                    state.demon_split_secondary_alive[i],
-                    lambda: self.jr.render_at_clipped(
-                        split_raster,
-                        state.demon_split_x[i],
-                        state.demons_y[i],
-                        small_demon_mask,
-                    ),
-                    lambda: split_raster,
+                rr = jax.lax.cond(
+                    jnp.logical_and(split_death, state.demon_split_secondary_alive[i]),
+                    lambda: self.jr.render_at(rr, state.demon_split_x[i], state.demons_y[i], small_demon_mask),
+                    lambda: rr,
                 )
 
-            def render_normal():
-                blink_phase = state.spawn_pause_timer[i] // self.consts.DEMON_TELEPORT_BLINK_FRAME_DURATION & 1
-                blink_visible = (
-                        (state.spawn_pause_timer[i] <= self.consts.SPAWN_MOVE_PAUSE)
-                        | (blink_phase == 0)
-                )
-
-                def render_full_demon():
-                    return jax.lax.cond(
-                        blink_visible,
-                        lambda: self.jr.render_at_clipped(
-                            r,
-                            state.demons_x[i],
-                            state.demons_y[i],
-                            demon_mask,
-                        ),
-                        lambda: r,
-                    )
-
-                return jax.lax.cond(
-                    state.demon_status[i] == DEMON_STATUS_SMALL,
-                    render_split,  # Always rendered; no blinking
-                    render_full_demon,  # Blinking applies only to non-small demons
-                )
-
-            def render_death():
-                split_death = state.demon_split_death_part[i] != SPLIT_DEATH_NONE
-                death_masks = jax.lax.cond(
-                    split_death,
-                    lambda: self.SHAPE_MASKS["enemy_death_animation_small"],
-                    lambda: self.SHAPE_MASKS["enemy_death_animation"],
-                )
-                death_frame = jnp.clip(
+                death_frame_big = jnp.clip(
                     (
                         (self.consts.DEMON_DEATH_ANIMATION_DURATION - state.demon_death_anim_timer[i])
-                        * death_masks.shape[0]
+                        * death_masks_big.shape[0]
                     )
                     // self.consts.DEMON_DEATH_ANIMATION_DURATION,
                     0,
-                    death_masks.shape[0] - 1,
+                    death_masks_big.shape[0] - 1,
                 )
-                death_x = state.demon_death_anim_x[i]
-                death_y = state.demon_death_anim_y[i]
-                death_raster = jax.lax.cond(
+                death_frame_small = jnp.clip(
+                    (
+                        (self.consts.DEMON_DEATH_ANIMATION_DURATION - state.demon_death_anim_timer[i])
+                        * death_masks_small.shape[0]
+                    )
+                    // self.consts.DEMON_DEATH_ANIMATION_DURATION,
+                    0,
+                    death_masks_small.shape[0] - 1,
+                )
+                # Big vs small death sprite are different shapes
+                return jax.lax.cond(
                     split_death,
-                    render_split,
-                    lambda: r,
-                )
-                return self.jr.render_at_clipped(
-                    death_raster,
-                    death_x,
-                    death_y,
-                    death_masks[death_frame],
+                    lambda: self.jr.render_at(
+                        rr, state.demon_death_anim_x[i], state.demon_death_anim_y[i],
+                        death_masks_small[death_frame_small],
+                    ),
+                    lambda: self.jr.render_at(
+                        rr, state.demon_death_anim_x[i], state.demon_death_anim_y[i],
+                        death_masks_big[death_frame_big],
+                    ),
                 )
 
-            return jax.lax.cond(
-                is_dying,
-                render_death,
-                lambda: jax.lax.cond(
-                    state.demons_alive[i],
-                    lambda: jax.lax.cond(
-                        is_spawning,
-                        render_spawn,
-                        render_normal,
-                    ),
-                    lambda: r,
-                ),
+            return jax.lax.switch(
+                mode,
+                [branch_none, branch_dying, branch_spawning, branch_full, branch_split],
+                r,
             )
 
         return jax.lax.fori_loop(0, self.consts.DEMON_SLOTS, render_demon, raster)
