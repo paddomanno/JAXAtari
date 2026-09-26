@@ -8,7 +8,7 @@ HYP_TUNE: False
 
 # wandb params
 WANDB_MODE: "online"  # set to online to activate wandb
-ENTITY: "pafend-tu-darmstadt"
+ENTITY: "jaxatari"
 # PROJECT: "debug"
 PROJECT: "submission_runs_big"
 alg:
